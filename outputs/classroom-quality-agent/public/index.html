@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>课堂质量改进智能体 · Sprint 1 课前智能备课</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-mark">课</span>
+        <div>
+          <h1>课堂质量改进智能体</h1>
+          <p class="subtitle">Sprint 1 · 课前智能备课（人机协同编码 · 网页版原型）</p>
+        </div>
+      </div>
+      <div class="dod-badge" title="DoD：代码能跑 · 有基本测试 · 有代码注释">
+        DoD 达成
+      </div>
+    </div>
+  </header>
+
+  <nav class="stepper" aria-label="实验流程">
+    <button class="step is-active" data-step="1"><span class="step-num">1</span><span>资料上传</span></button>
+    <button class="step" data-step="2"><span class="step-num">2</span><span>内容理解</span></button>
+    <button class="step" data-step="3"><span class="step-num">3</span><span>前沿补充</span></button>
+    <button class="step" data-step="4"><span class="step-num">4</span><span>PPT生成</span></button>
+    <button class="step" data-step="5"><span class="step-num">5</span><span>人工审核</span></button>
+  </nav>
+
+  <main class="content">
+    <!-- 步骤1：资料上传 -->
+    <section class="panel is-active" data-panel="1">
+      <h2>① 上传教学资料</h2>
+      <p class="muted">上传或粘贴历史教案、教学用书、教学大纲和往年 PPT，智能体将据此理解课程背景。</p>
+
+      <div class="toolbar">
+        <button class="btn" id="btn-sample">填入示例资料</button>
+        <label class="btn btn-ghost">
+          上传文本文件（.txt / .md）
+          <input type="file" id="file-input" multiple accept=".txt,.md,.text,.markdown" hidden />
+        </label>
+        <button class="btn btn-ghost" id="btn-clear">清空</button>
+      </div>
+
+      <div class="file-chips" id="file-chips" hidden></div>
+
+      <div class="material-grid">
+        <label class="field">
+          <span class="field-label">历史教案</span>
+          <textarea id="mat-lesson-plan" rows="7" placeholder="粘贴历史教案内容…"></textarea>
+        </label>
+        <label class="field">
+          <span class="field-label">教学用书</span>
+          <textarea id="mat-textbook" rows="7" placeholder="粘贴教学用书相关章节…"></textarea>
+        </label>
+        <label class="field">
+          <span class="field-label">教学大纲</span>
+          <textarea id="mat-syllabus" rows="7" placeholder="粘贴课程教学大纲…"></textarea>
+        </label>
+        <label class="field">
+          <span class="field-label">往年 PPT</span>
+          <textarea id="mat-past-ppt" rows="7" placeholder="粘贴往年 PPT 大纲或内容…"></textarea>
+        </label>
+      </div>
+
+      <div class="panel-actions">
+        <button class="btn btn-primary" id="btn-analyze">解析资料，开始内容理解 →</button>
+      </div>
+    </section>
+
+    <!-- 步骤2：内容理解 -->
+    <section class="panel" data-panel="2">
+      <h2>② 内容理解（结构化解析）</h2>
+      <p class="muted">智能体已从资料中提取章节、教学目标、知识点、重点与难点。可勾选要纳入 PPT 的知识点。</p>
+      <div id="analysis-result" class="analysis-result"></div>
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <button class="btn btn-primary" id="btn-to-supplement">匹配前沿补充 →</button>
+      </div>
+    </section>
+
+    <!-- 步骤3：前沿补充 -->
+    <section class="panel" data-panel="3">
+      <h2>③ 前沿技术 / 行业案例补充</h2>
+      <p class="muted">围绕课程主题匹配最新技术与行业案例，每条均标注来源与待核验状态。可勾选要纳入 PPT 的内容。</p>
+      <div id="supplement-result" class="supplement-result"></div>
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <button class="btn btn-primary" id="btn-to-generate">生成 PPT 初稿 →</button>
+      </div>
+    </section>
+
+    <!-- 步骤4：PPT生成 -->
+    <section class="panel" data-panel="4">
+      <h2>④ PPT 大纲与初稿</h2>
+      <p class="muted">按“导入 → 讲解 → 案例 → 互动 → 总结”结构组织 PPT 初稿，可导出为 Markdown。</p>
+      <div id="ppt-preview" class="ppt-preview"></div>
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <div class="actions-right">
+          <button class="btn btn-ghost" id="btn-export-md">导出 Markdown</button>
+          <button class="btn btn-ghost" id="btn-export-pptx">下载 PPT（.pptx）</button>
+          <button class="btn btn-primary" id="btn-to-review">进入人工审核 →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 步骤5：人工审核 -->
+    <section class="panel" data-panel="5">
+      <h2>⑤ 人工审核与确认</h2>
+      <p class="muted">教师可修改、删除或确认每一页 PPT 内容；未经确认的内容不能直接用于正式授课。</p>
+      <div class="review-summary" id="review-summary"></div>
+      <div id="review-list" class="review-list"></div>
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <div class="actions-right">
+          <button class="btn btn-ghost" id="btn-export-final">导出 Markdown 大纲</button>
+          <button class="btn btn-primary" id="btn-export-pptx-final">下载 PPT（.pptx）</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    课堂质量改进智能体 · 爱教学项目 · Team11 · 软件项目管理实验二（Sprint 1）· 人机协同编码原型
+  </footer>
+
+  <script src="./vendor/pptxgen.bundle.js"></script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
