@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>课堂质量改进智能体 · Sprint 2 课中课堂感知</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-mark">课</span>
+        <div>
+          <h1>课堂质量改进智能体</h1>
+          <p class="subtitle">Sprint 2 · 课中课堂感知（人机协同编码 · 网页版原型）</p>
+        </div>
+      </div>
+      <a class="dod-badge home-link" href="./home.html">← 返回首页</a>
+    </div>
+  </header>
+
+  <nav class="stepper" aria-label="实验流程">
+    <button class="step is-active" data-step="1"><span class="step-num">1</span><span>课堂设置</span></button>
+    <button class="step" data-step="2"><span class="step-num">2</span><span>数据采集</span></button>
+    <button class="step" data-step="3"><span class="step-num">3</span><span>课堂感知分析</span></button>
+    <button class="step" data-step="4"><span class="step-num">4</span><span>课堂时间轴</span></button>
+  </nav>
+
+  <main class="content">
+    <!-- 步骤1：课堂设置 -->
+    <section class="panel is-active" data-panel="1">
+      <h2>① 课堂设置</h2>
+      <p class="muted">按“一节课 → 课间休息 → 下一节课”的真实节奏填写。抬头率只统计整体趋势、不做人脸识别。</p>
+      <div class="toolbar">
+        <button class="btn" id="btn-sample2">载入示例数据</button>
+        <button class="btn btn-ghost" id="btn-clear2">清空</button>
+      </div>
+      <div class="material-grid">
+        <label class="field">
+          <span class="field-label">课程名称</span>
+          <input type="text" id="inp-course" value="数据结构 · 第5章 排序算法" />
+        </label>
+        <label class="field">
+          <span class="field-label">开始时间</span>
+          <input type="time" id="inp-start" value="08:00" />
+        </label>
+        <label class="field">
+          <span class="field-label">第一节时长（分钟）</span>
+          <input type="number" id="inp-session1" value="45" min="5" max="120" />
+        </label>
+        <label class="field">
+          <span class="field-label">课间休息（分钟）</span>
+          <input type="number" id="inp-break" value="10" min="0" max="60" />
+        </label>
+        <label class="field">
+          <span class="field-label">第二节时长（分钟）</span>
+          <input type="number" id="inp-session2" value="45" min="0" max="120" />
+        </label>
+        <label class="field">
+          <span class="field-label">抬头率采样间隔（秒）</span>
+          <input type="number" id="inp-interval" value="30" min="10" max="300" />
+        </label>
+      </div>
+      <div class="panel-actions">
+        <button class="btn btn-primary" id="btn-to-transcript">开始数据采集 →</button>
+      </div>
+    </section>
+
+    <!-- 步骤2：数据采集 -->
+    <section class="panel" data-panel="2">
+      <h2>② 课堂数据采集</h2>
+      <p class="muted">上传课堂录像/录音，或直接粘贴带时间戳的转写文本。抬头率来自课堂视频；语音转写可由视频/录音提取。</p>
+
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="media-file" accept="video/*,audio/*" hidden />
+        <div class="upload-hint">📤 点击或拖拽上传课堂视频 / 录音文件</div>
+        <div class="upload-sub">支持 mp4、webm、mp3、wav、m4a 等格式；原型演示会生成示意转写与抬头率，真实识别需接入 ASR。</div>
+      </div>
+      <div class="media-preview" id="media-preview"></div>
+      <div class="ai-status" id="upload-status"></div>
+
+      <div class="section-gap"></div>
+      <div class="toolbar">
+        <button class="btn" id="btn-record">🎙 实时录音转写（可选）</button>
+        <button class="btn btn-ghost" id="btn-stop-record" disabled>停止</button>
+        <span class="ai-status" id="record-status"></span>
+      </div>
+
+      <label class="field">
+        <span class="field-label">转写文本（可手动编辑替换为真实结果）</span>
+        <textarea id="transcript-input" rows="9" placeholder="粘贴转写文本，每行：[00:00-00:55] 内容"></textarea>
+      </label>
+
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <button class="btn btn-primary" id="btn-to-analysis">分析课堂感知 →</button>
+      </div>
+    </section>
+
+    <!-- 步骤3：课堂感知分析 -->
+    <section class="panel" data-panel="3">
+      <h2>③ 课堂感知分析</h2>
+      <p class="muted">抬头率整体趋势（含课间休息）、语速语调分析，以及注意力回落时间段。</p>
+      <div id="analysis-result2" class="analysis-result"></div>
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <button class="btn btn-primary" id="btn-to-timeline">生成课堂时间轴 →</button>
+      </div>
+    </section>
+
+    <!-- 步骤4：课堂时间轴 -->
+    <section class="panel" data-panel="4">
+      <h2>④ 课堂时间轴与记录</h2>
+      <p class="muted">整合抬头率、语音转写与状态变化，生成带时间戳的课堂记录。</p>
+      <div id="timeline-result" class="timeline-result"></div>
+      <div class="panel-actions between">
+        <button class="btn btn-ghost" data-prev>← 返回</button>
+        <div class="actions-right">
+          <button class="btn btn-ghost" id="btn-export-record">导出课堂记录（Markdown）</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">课堂质量改进智能体 · 爱教学项目 · Team11 · Sprint 2 课中课堂感知</footer>
+
+  <script type="module" src="./sprint2.js"></script>
+</body>
+</html>

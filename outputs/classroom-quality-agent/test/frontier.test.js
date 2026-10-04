@@ -29,3 +29,15 @@ test('按类型分组正确', () => {
   assert.ok(grouped.tech.every((item) => item.type === '技术'));
   assert.ok(grouped.cases.every((item) => item.type === '案例'));
 });
+
+
+test('知识库能匹配排序之外的主题', () => {
+  const result = matchSupplements(['二叉树的基本操作', '哈希表的实现']);
+  const ids = result.map((item) => item.id);
+  assert.ok(ids.includes('f-12'));
+  assert.ok(ids.includes('f-20'));
+});
+
+test('知识库已扩充到覆盖多种主题', () => {
+  assert.ok(FRONTIER_KB.length >= 20);
+});

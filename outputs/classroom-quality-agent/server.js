@@ -5,6 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateOutlineWithLLM } from './src/llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -33,7 +34,7 @@ function resolvePath(urlPath) {
     // 非法百分号编码的 URL 直接拒绝，避免 decodeURIComponent 抛异常导致服务器崩溃。
     return null;
   }
-  const relative = pathname === '/' ? 'public/index.html' : pathname.replace(/^\/+/, '');
+  const relative = pathname === '/' ? 'public/home.html' : pathname.replace(/^\/+/, '');
   const absolute = path.resolve(ROOT, relative);
   // 解析后的路径必须仍然位于项目根目录之内。
   if (absolute !== ROOT && !absolute.startsWith(ROOT + path.sep)) {
@@ -42,12 +43,73 @@ function resolvePath(urlPath) {
   return absolute;
 }
 
+// 读取 JSON 请求体（限制大小，避免恶意超大请求）。
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 5 * 1024 * 1024) {
+        reject(new Error('请求体过大。'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+// 处理 POST /api/generate-outline：调用大模型生成 PPT 大纲。
+async function handleGenerateOutline(req, res) {
+  const jsonHeaders = { 'Content-Type': 'application/json; charset=utf-8' };
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    res.writeHead(400, jsonHeaders);
+    res.end(JSON.stringify({ error: '请求体不是有效的 JSON。' }));
+    return;
+  }
+
+  const { analysis, supplements, config } = body || {};
+  if (!analysis || !Array.isArray(analysis.knowledgePoints)) {
+    res.writeHead(400, jsonHeaders);
+    res.end(JSON.stringify({ error: '缺少有效的 analysis 参数。' }));
+    return;
+  }
+
+  try {
+    const result = await generateOutlineWithLLM(analysis, supplements || [], config || {});
+    res.writeHead(200, jsonHeaders);
+    res.end(JSON.stringify(result));
+  } catch (error) {
+    res.writeHead(500, jsonHeaders);
+    res.end(JSON.stringify({ error: (error && error.message) || '生成失败。' }));
+  }
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
 
-  // 把站点根路径重定向到 public 目录下的入口页，
-  // 保证 index.html 中的相对路径（./styles.css、./main.js 等）能正确解析。
-  if (url === '/' || url === '/index.html') {
+  // 新增：AI 生成 PPT 大纲接口（接大模型 API，人机协同编码）。
+  if (req.method === 'POST' && url === '/api/generate-outline') {
+    handleGenerateOutline(req, res);
+    return;
+  }
+
+  // 站点入口：根路径到首页；/index.html 兼容旧入口，跳到 Sprint 1。
+  if (url === '/') {
+    res.writeHead(302, { Location: '/public/home.html' });
+    res.end();
+    return;
+  }
+  if (url === '/index.html') {
     res.writeHead(302, { Location: '/public/index.html' });
     res.end();
     return;
@@ -81,5 +143,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`课堂质量改进智能体（Sprint 1）已启动：http://localhost:${PORT}`);
+  console.log(`课堂质量改进智能体已启动：http://localhost:${PORT}`);
 });

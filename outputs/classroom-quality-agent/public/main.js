@@ -14,6 +14,7 @@ import {
   SLIDE_STATUS,
 } from '../src/review.js';
 import { SAMPLE_MATERIALS } from './sample.js';
+import { readDocxText } from '../src/docxReader.js';
 
 // 全局状态：保存当前步骤、解析结果、用户选择与生成的幻灯片。
 const state = {
@@ -334,6 +335,90 @@ function downloadPptx(filename) {
     });
 }
 
+// —— AI 生成（接大模型 API）相关 ——
+const AI_CONFIG_KEY = 'cq-agent-ai-config';
+
+// 从三个输入框读取 API 配置并保存到本地，避免每次刷新都重新填。
+function readAiConfig() {
+  const config = {
+    apiKey: $('#ai-apikey').value.trim(),
+    baseUrl: $('#ai-baseurl').value.trim(),
+    model: $('#ai-model').value.trim(),
+  };
+  try {
+    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(config));
+  } catch {
+    /* localStorage 不可用时静默忽略 */
+  }
+  return config;
+}
+
+// 从本地存储恢复 API 配置到输入框。
+function restoreAiConfig() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || 'null');
+  } catch {
+    saved = null;
+  }
+  if (!saved) return;
+  $('#ai-apikey').value = saved.apiKey || '';
+  $('#ai-baseurl').value = saved.baseUrl || '';
+  $('#ai-model').value = saved.model || '';
+}
+
+// 显示 AI 生成状态提示。
+function showAiStatus(text) {
+  const host = $('#ai-status');
+  if (!host) return;
+  host.textContent = text || '';
+}
+
+// 调用后端接口，用大模型重新生成 PPT 大纲。
+async function generateWithAI() {
+  if (!state.analysis) {
+    alert('请先完成内容理解。');
+    return;
+  }
+  const knowledgePoints = state.analysis.knowledgePoints.filter((point) =>
+    state.selectedPoints.has(point),
+  );
+  const supplements = state.supplements.filter((item) =>
+    state.selectedSupplements.has(item.id),
+  );
+  const filteredAnalysis = { ...state.analysis, knowledgePoints };
+  const config = readAiConfig();
+
+  const btn = $('#btn-ai-generate');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '生成中…';
+  showAiStatus('');
+
+  try {
+    const resp = await fetch('/api/generate-outline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analysis: filteredAnalysis, supplements, config }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || '请求失败（' + resp.status + '）');
+
+    state.slides = data.slides || [];
+    if (data.source === 'llm') {
+      showAiStatus('✅ AI 生成完成，共 ' + state.slides.length + ' 页。');
+    } else {
+      showAiStatus('ℹ️ 已用本地模板生成' + (data.warning ? '（' + data.warning + '）' : '') + '。');
+    }
+    renderPptPreview();
+  } catch (error) {
+    showAiStatus('❌ ' + (error && error.message ? error.message : error));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 // 绑定所有按钮与交互事件。
 function bindEvents() {
   $('#btn-sample').addEventListener('click', fillSample);
@@ -351,7 +436,9 @@ function bindEvents() {
   $('#file-input').addEventListener('change', async (event) => {
     const files = Array.from(event.target.files || []);
     for (const file of files) {
-      const text = await file.text();
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      // .docx 走专门的 Word 解析，其它文本文件直接读取为字符串。
+      const text = ext === 'docx' ? await readDocxText(file) : await file.text();
       if (text.trim()) state.uploads.push({ type: '补充资料', title: file.name, content: text });
     }
     event.target.value = '';
@@ -378,6 +465,11 @@ function bindEvents() {
     render();
   });
   $('#btn-to-review').addEventListener('click', () => navigateTo(5));
+
+  $('#btn-ai-generate').addEventListener('click', generateWithAI);
+  ['#ai-apikey', '#ai-baseurl', '#ai-model'].forEach((selector) => {
+    $(selector).addEventListener('change', readAiConfig);
+  });
 
   $('#btn-export-md').addEventListener('click', () =>
     download('PPT初稿-Sprint1.md', toMarkdown(state.slides)),
@@ -438,3 +530,4 @@ function renderFileChips() {
 bindEvents();
 seedSampleIfEmpty();
 renderFileChips();
+restoreAiConfig();

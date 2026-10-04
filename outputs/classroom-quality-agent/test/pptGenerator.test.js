@@ -61,3 +61,15 @@ test('能够导出 Markdown 大纲', () => {
   assert.ok(markdown.includes('## 总结'));
   assert.ok(markdown.includes('快速排序。'));
 });
+
+
+test('导出 Markdown 会过滤已删除的幻灯片', () => {
+  const slides = generateOutline(ANALYSIS, SUPPLEMENTS);
+  const withDeleted = slides.map((slide) =>
+    slide.title === '快速排序。' ? { ...slide, status: 'deleted' } : slide,
+  );
+  const markdown = toMarkdown(withDeleted);
+  assert.ok(!markdown.includes('快速排序。'));
+  assert.ok(markdown.includes('## 导入'));
+  assert.ok(markdown.includes('## 总结'));
+});
