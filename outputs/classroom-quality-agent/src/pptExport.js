@@ -3,6 +3,39 @@
 // 本模块不直接 import pptxgenjs，而是通过参数注入 PptxGenJS 构造器，
 // 从而在浏览器（全局 PptxGenJS）与 Node（本地验证）中复用同一套排版逻辑。
 
+function compactCoverText(value, maxLength) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  return text.slice(0, Math.max(1, maxLength - 1)).trimEnd() + '…';
+}
+
+// 根据结构化教学内容生成封面文案，不再展示项目阶段名称。
+export function deriveCoverContent(analysis = {}, slides = []) {
+  const activeSlides = (slides || []).filter((slide) => slide.status !== 'deleted');
+  const chapters = Array.isArray(analysis.chapters) ? analysis.chapters.filter(Boolean) : [];
+  const objectives = Array.isArray(analysis.objectives) ? analysis.objectives.filter(Boolean) : [];
+  const knowledgePoints = Array.isArray(analysis.knowledgePoints)
+    ? analysis.knowledgePoints.filter(Boolean)
+    : [];
+
+  const firstContentSlide = activeSlides.find((slide) => slide.section === '讲解') || activeSlides[0];
+  const rawTitle = chapters[0] || knowledgePoints[0] || (firstContentSlide && firstContentSlide.title) || '课程教学课件';
+  const title = compactCoverText(rawTitle, 42);
+
+  let rawSubtitle = objectives[0] || knowledgePoints
+    .filter((point) => String(point).trim() !== String(rawTitle).trim())
+    .slice(0, 3)
+    .join(' · ');
+  if (!rawSubtitle && firstContentSlide && firstContentSlide.title !== rawTitle) {
+    rawSubtitle = firstContentSlide.title;
+  }
+
+  return {
+    coverTitle: title,
+    coverSubtitle: compactCoverText(rawSubtitle || '课程教学课件', 72),
+  };
+}
+
 // 把内部幻灯片转换为导出用的内容模型，并过滤掉“已删除”的幻灯片。
 export function slidesToExportModel(slides, options = {}) {
   const items = (slides || [])
@@ -19,7 +52,7 @@ export function slidesToExportModel(slides, options = {}) {
     items.unshift({
       section: '封面',
       title: options.coverTitle,
-      bullets: [options.coverSubtitle || '课堂质量改进智能体 · Sprint 1 课前智能备课'],
+      bullets: [options.coverSubtitle || '课程教学课件'],
       notes: [],
     });
   }
@@ -41,7 +74,8 @@ export function buildPresentation(model, PptxGenJS) {
   pptx.defineLayout({ name: 'SPRINT1_16x9', width: 13.333, height: 7.5 });
   pptx.layout = 'SPRINT1_16x9';
   pptx.author = '课堂质量改进智能体';
-  pptx.title = '课前智能备课 PPT 初稿';
+  const cover = model.find((item) => item.section === '封面');
+  pptx.title = cover ? cover.title : '课程教学课件';
 
   for (const item of model) {
     if (item.section === '封面') {

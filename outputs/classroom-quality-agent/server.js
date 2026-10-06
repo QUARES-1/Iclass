@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateOutlineWithLLM } from './src/llm.js';
+import { extractUploadedFile, FileParseError, MAX_UPLOAD_BYTES } from './src/fileParser.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -23,7 +24,8 @@ try {
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = Math.max(1, Number(process.env.LLM_RATE_LIMIT) || 10);
+const LLM_RATE_LIMIT_MAX = Math.max(1, Number(process.env.LLM_RATE_LIMIT) || 10);
+const FILE_PARSE_RATE_LIMIT_MAX = Math.max(1, Number(process.env.FILE_PARSE_RATE_LIMIT) || 30);
 const requestBuckets = new Map();
 
 // 常用文件类型到 Content-Type 的映射，避免浏览器把 JS/CSS 当作文本误读。
@@ -80,6 +82,38 @@ function readJsonBody(req) {
   });
 }
 
+// 读取 PPTX 二进制请求体。限制原始文件大小，防止大文件耗尽服务端内存。
+function readBinaryBody(req) {
+  return new Promise((resolve, reject) => {
+    const declaredLength = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+      req.resume();
+      reject(new FileParseError('文件超过 15 MB 上传限制。', 413, 'FILE_TOO_LARGE'));
+      return;
+    }
+
+    const chunks = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_UPLOAD_BYTES) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (tooLarge) {
+        reject(new FileParseError('文件超过 15 MB 上传限制。', 413, 'FILE_TOO_LARGE'));
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
+    req.on('error', reject);
+  });
+}
+
 function isStringArray(value, maxItems = 200) {
   return Array.isArray(value)
     && value.length <= maxItems
@@ -102,13 +136,13 @@ function isValidSupplements(supplements) {
     && supplements.every((item) => item && typeof item === 'object');
 }
 
-function isRateLimited(req) {
+function isRateLimited(req, scope, maxRequests) {
   const now = Date.now();
-  const client = req.socket.remoteAddress || 'unknown';
+  const client = `${scope}:${req.socket.remoteAddress || 'unknown'}`;
   const recent = (requestBuckets.get(client) || []).filter(
     (time) => now - time < RATE_LIMIT_WINDOW_MS,
   );
-  if (recent.length >= RATE_LIMIT_MAX) {
+  if (recent.length >= maxRequests) {
     requestBuckets.set(client, recent);
     return true;
   }
@@ -147,12 +181,56 @@ async function handleGenerateOutline(req, res) {
   }
 }
 
+// 处理 POST /api/extract-file：在后端安全提取 PPTX 中的文本。
+async function handleExtractFile(req, res, requestUrl) {
+  const jsonHeaders = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  const fileName = requestUrl.searchParams.get('name') || '';
+  if (!fileName || fileName.length > 255) {
+    res.writeHead(400, jsonHeaders);
+    res.end(JSON.stringify({ error: '请提供有效的文件名。' }));
+    return;
+  }
+
+  try {
+    const buffer = await readBinaryBody(req);
+    const result = await extractUploadedFile(buffer, fileName);
+    res.writeHead(200, jsonHeaders);
+    res.end(JSON.stringify(result));
+  } catch (error) {
+    if (error instanceof FileParseError) {
+      res.writeHead(error.statusCode, jsonHeaders);
+      res.end(JSON.stringify({ error: error.message, code: error.code }));
+      return;
+    }
+    console.error('解析上传文件失败：', error);
+    res.writeHead(500, jsonHeaders);
+    res.end(JSON.stringify({ error: '文件解析失败，请稍后重试。' }));
+  }
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
+  const requestUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
+
+  if (req.method === 'POST' && requestUrl.pathname === '/api/extract-file') {
+    if (isRateLimited(req, 'file', FILE_PARSE_RATE_LIMIT_MAX)) {
+      res.writeHead(429, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Retry-After': '60',
+      });
+      res.end(JSON.stringify({ error: '文件解析请求过于频繁，请稍后重试。' }));
+      return;
+    }
+    handleExtractFile(req, res, requestUrl);
+    return;
+  }
 
   // 新增：AI 生成 PPT 大纲接口（接大模型 API，人机协同编码）。
-  if (req.method === 'POST' && url === '/api/generate-outline') {
-    if (isRateLimited(req)) {
+  if (req.method === 'POST' && requestUrl.pathname === '/api/generate-outline') {
+    if (isRateLimited(req, 'llm', LLM_RATE_LIMIT_MAX)) {
       res.writeHead(429, {
         'Content-Type': 'application/json; charset=utf-8',
         'Retry-After': '60',

@@ -5,7 +5,7 @@
 import { analyzeMaterials } from '../src/analyzer.js';
 import { matchSupplements } from '../src/frontier.js';
 import { generateOutline, toMarkdown } from '../src/pptGenerator.js';
-import { slidesToExportModel, buildPresentation } from '../src/pptExport.js';
+import { slidesToExportModel, buildPresentation, deriveCoverContent } from '../src/pptExport.js';
 import {
   setSlideStatus,
   updateSlide,
@@ -29,6 +29,8 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+const TEXT_EXTENSIONS = new Set(['txt', 'text', 'md', 'markdown']);
 
 // 转义 HTML，防止把资料中的特殊字符渲染成标签。
 function esc(value) {
@@ -55,6 +57,46 @@ function collectTextareaMaterials() {
 // 收集全部资料（文本域 + 已上传文件）。
 function collectMaterials() {
   return [...collectTextareaMaterials(), ...state.uploads];
+}
+
+function showFileStatus(text, isError = false) {
+  const host = $('#file-status');
+  if (!host) return;
+  host.textContent = text || '';
+  host.style.color = isError ? '#b91c1c' : '';
+}
+
+// PPTX 交给后端解析，避免在浏览器中误读二进制文件。
+async function readServerParsedFile(file) {
+  const response = await fetch('/api/extract-file?name=' + encodeURIComponent(file.name), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `文件解析失败（${response.status}）`);
+  return data;
+}
+
+async function readUploadedFile(file) {
+  const extension = (file.name.split('.').pop() || '').toLowerCase();
+  if (file.size > MAX_UPLOAD_BYTES) throw new Error('文件超过 15 MB 上传限制');
+
+  if (extension === 'docx') {
+    return { content: await readDocxText(file), type: '补充资料', truncated: false };
+  }
+  if (extension === 'pptx' || extension === 'ppt') {
+    const result = await readServerParsedFile(file);
+    return {
+      content: result.content,
+      type: extension === 'pptx' || extension === 'ppt' ? '往年PPT' : '补充资料',
+      truncated: Boolean(result.truncated),
+    };
+  }
+  if (TEXT_EXTENSIONS.has(extension)) {
+    return { content: await file.text(), type: '补充资料', truncated: false };
+  }
+  throw new Error('不支持该文件类型');
 }
 
 // 步骤①→②：解析资料并初始化“内容理解”与“前沿补充”的默认选择。
@@ -324,8 +366,8 @@ function downloadPptx(filename) {
     alert('PPT 组件未加载，请刷新页面后重试。');
     return;
   }
-  const coverTitle = (state.analysis && state.analysis.chapters[0]) || '课堂质量改进智能体 · 课前智能备课';
-  const model = slidesToExportModel(state.slides, { coverTitle });
+  const coverContent = deriveCoverContent(state.analysis || {}, state.slides);
+  const model = slidesToExportModel(state.slides, coverContent);
   const pptx = buildPresentation(model, PptxGenJS);
   pptx.write({ outputType: 'blob' })
     .then((blob) => downloadBlob(filename, blob))
@@ -398,18 +440,36 @@ function bindEvents() {
     state.analysis = null;
     state.slides = [];
     renderFileChips();
+    showFileStatus('');
   });
 
   $('#file-input').addEventListener('change', async (event) => {
     const files = Array.from(event.target.files || []);
+    const failures = [];
+    let imported = 0;
+    showFileStatus(files.length ? `正在读取 ${files.length} 个文件…` : '');
     for (const file of files) {
-      const ext = (file.name.split('.').pop() || '').toLowerCase();
-      // .docx 走专门的 Word 解析，其它文本文件直接读取为字符串。
-      const text = ext === 'docx' ? await readDocxText(file) : await file.text();
-      if (text.trim()) state.uploads.push({ type: '补充资料', title: file.name, content: text });
+      try {
+        const result = await readUploadedFile(file);
+        if (!result.content.trim()) throw new Error('没有提取到可用文字');
+        // 同名文件再次上传时替换旧内容，避免重复资料影响内容理解。
+        state.uploads = state.uploads.filter((item) => item.title !== file.name);
+        state.uploads.push({ type: result.type, title: file.name, content: result.content });
+        imported += 1;
+        if (result.truncated) failures.push(`${file.name}：内容过长，已截取前 250000 个字符`);
+      } catch (error) {
+        failures.push(`${file.name}：${error && error.message ? error.message : error}`);
+      }
     }
     event.target.value = '';
+    if (imported) {
+      state.analysis = null;
+      state.supplements = [];
+      state.slides = [];
+    }
     renderFileChips();
+    const summary = imported ? `已成功读取 ${imported} 个文件。` : '';
+    showFileStatus([summary, ...failures].filter(Boolean).join(' '), failures.length > 0);
   });
 
   $('#btn-analyze').addEventListener('click', () => {
@@ -468,14 +528,6 @@ function fillSample() {
   state.slides = [];
 }
 
-// 首次打开时若资料为空，则自动填入示例，方便完整体验流程。
-function seedSampleIfEmpty() {
-  const isEmpty = ['#mat-lesson-plan', '#mat-textbook', '#mat-syllabus', '#mat-past-ppt'].every(
-    (selector) => !$(selector).value.trim(),
-  );
-  if (isEmpty) fillSample();
-}
-
 // 渲染已上传文件的小标签。
 function renderFileChips() {
   const host = $('#file-chips');
@@ -492,5 +544,4 @@ function renderFileChips() {
 
 // 启动应用。
 bindEvents();
-seedSampleIfEmpty();
 renderFileChips();
