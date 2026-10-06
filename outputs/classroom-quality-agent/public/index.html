@@ -98,27 +98,7 @@
       <h2>④ PPT 大纲与初稿</h2>
       <p class="muted">按“导入 → 讲解 → 案例 → 互动 → 总结”结构组织 PPT 初稿，可导出为 Markdown。</p>
       <div class="ai-toolbar">
-        <details class="ai-settings">
-          <summary>🤖 AI 智能生成设置（可选，不填则用本地模板）</summary>
-          <div class="ai-fields">
-            <label class="ai-field">
-              <span class="ai-label">API Key</span>
-              <input type="password" id="ai-apikey" placeholder="sk-…" autocomplete="off" />
-            </label>
-            <label class="ai-field">
-              <span class="ai-label">接口地址（Base URL）</span>
-              <input type="text" id="ai-baseurl" placeholder="https://api.openai.com/v1" />
-            </label>
-            <label class="ai-field">
-              <span class="ai-label">模型</span>
-              <input type="text" id="ai-model" placeholder="gpt-4o-mini / deepseek-chat / qwen-plus" />
-            </label>
-          </div>
-          <p class="muted">
-            常用配置：DeepSeek 地址 <code>https://api.deepseek.com</code>，模型 <code>deepseek-chat</code>；
-            通义千问地址 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>，模型 <code>qwen-plus</code>。
-          </p>
-        </details>
+        <p class="muted ai-config-note">🤖 AI 连接由后端环境变量安全配置；浏览器不会接触或保存 API Key。未配置时自动使用本地模板。</p>
         <button class="btn btn-ghost" id="btn-ai-generate">🤖 AI 重新生成 PPT</button>
         <span class="ai-status" id="ai-status"></span>
       </div>

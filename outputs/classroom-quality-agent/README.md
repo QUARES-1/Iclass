@@ -18,17 +18,18 @@ Sprint 1 覆盖 4 条 Must 用户故事：
 ## 二、技术方案
 
 - 前端：原生 HTML + CSS + ES Module（无框架、无打包），浏览器直接运行。
-- 后端：`server.js` 仅作为静态文件服务器，使用 Node.js 内置 `http` 模块，零第三方依赖。
+- 后端：`server.js` 使用 Node.js 内置 `http` 模块托管静态文件，并提供安全的 LLM 大纲生成接口。
 - 核心逻辑：`src/` 下的纯函数模块，浏览器与单元测试共用同一份实现。
 - 测试：Node.js 内置 `node:test`，覆盖关键路径的单元测试。
+- AI 生成：后端通过 OpenAI 兼容协议调用 DeepSeek；密钥仅从服务器环境变量读取，前端不会接触 API Key。调用失败时自动回退本地模板。
 - PPT 导出：使用浏览器端 PptxGenJS（见 `public/vendor/pptxgen.bundle.js`，MIT 协议），
   在页面内直接生成并下载真正的 PowerPoint（`.pptx`），一页一页可放映。
 
-> 说明：原型阶段的“AI 内容理解 / 前沿补充 / PPT 生成”采用规则式与本地知识库模拟，目的是验证流程闭环与人在回路的审核机制；真实场景可替换为大模型接口。
+> 说明：内容理解与前沿匹配仍以本地规则为主；PPT 大纲既可使用本地模板，也可由后端调用 DeepSeek 生成。
 
 ## 三、快速开始
 
-环境要求：Node.js ≥ 18。
+环境要求：Node.js ≥ 20.12。
 
 ```bash
 # 1) 启动网页版原型
@@ -39,14 +40,22 @@ npm start
 npm test
 ```
 
-也可以直接双击打开 `public/index.html`（推荐使用 `npm start`，因为 ES Module 需要通过 HTTP 加载）。
+### DeepSeek 安全配置
+
+1. 将 `.env.example` 复制为 `.env`。
+2. 只在服务器端的 `.env` 中填写 `LLM_API_KEY`；`.env` 已被 `.gitignore` 排除。
+3. 保持 `LLM_BASE_URL=https://api.deepseek.com`、`LLM_MODEL=deepseek-chat`，再执行 `npm start`。
+
+浏览器请求只包含结构化教学内容，不包含 API Key、Base URL 或模型配置。未配置 Key 时会自动使用本地模板。
+
+请通过 `npm start` 使用本系统；ES Module 和后端 AI 接口不能通过直接双击 HTML 正常工作。
 
 ## 四、使用流程
 
-1. **资料上传**：粘贴或上传教案、教学用书、教学大纲、往年 PPT，也可点击“填入示例资料”。
+1. **资料上传**：粘贴资料，或上传 `.txt`、`.md`、`.docx` 教学文件，也可点击“填入示例资料”。
 2. **内容理解**：查看解析出的章节、教学目标、知识点、重点与难点，勾选纳入 PPT 的知识点。
 3. **前沿补充**：查看匹配到的最新技术与行业案例（含来源与待核验状态），勾选要纳入的内容。
-4. **PPT 生成**：按“导入 → 讲解 → 案例 → 互动 → 总结”生成 PPT 初稿，可导出 Markdown 或下载 `.pptx`。
+4. **PPT 生成**：按“导入 → 讲解 → 案例 → 互动 → 总结”生成 PPT 初稿；可点击“AI 重新生成 PPT”，也可导出 Markdown 或下载 `.pptx`。
 5. **人工审核**：修改、删除或确认每一页内容；未经确认的内容不能用于正式授课；确认后可下载最终 `.pptx`。
 
 ## 五、目录结构

@@ -1,7 +1,7 @@
 // LLM 接入模块（Sprint 1 功能切片④增强）。
 // 把“内容理解 + 前沿补充”交给大模型，按 presentations skill 的写作质量规范，
 // 生成更贴近真实授课的 PPT 大纲；采用 OpenAI 兼容的 /chat/completions 协议，
-// 可适配 OpenAI / DeepSeek / 通义千问 / Moonshot 等。未配置 API Key 时自动回退本地模板。
+// 通过后端环境变量连接 OpenAI 兼容接口。未配置 API Key 时自动回退本地模板。
 
 import { generateOutline } from './pptGenerator.js';
 
@@ -75,8 +75,14 @@ export function normalizeSlides(raw) {
       id: 'slide-' + String(index + 1).padStart(3, '0'),
       section: SECTIONS.includes(slide.section) ? slide.section : '讲解',
       title: String(slide.title).trim(),
-      bullets: (Array.isArray(slide.bullets) ? slide.bullets : []).map(String).filter(Boolean),
-      notes: (Array.isArray(slide.notes) ? slide.notes : []).map(String).filter(Boolean),
+      bullets: (Array.isArray(slide.bullets) ? slide.bullets : [])
+        .filter((item) => typeof item === 'string' || typeof item === 'number')
+        .map((item) => String(item).trim())
+        .filter(Boolean),
+      notes: (Array.isArray(slide.notes) ? slide.notes : [])
+        .filter((item) => typeof item === 'string' || typeof item === 'number')
+        .map((item) => String(item).trim())
+        .filter(Boolean),
       status: 'pending',
     }));
 }
@@ -86,27 +92,35 @@ function env(name) {
   return typeof process !== 'undefined' && process.env ? process.env[name] : undefined;
 }
 
-// 调用大模型生成大纲；无 Key 或调用失败时回退本地模板，保证主流程不中断。
-export async function generateOutlineWithLLM(analysis, supplements = [], config = {}) {
-  const apiKey = config.apiKey || env('LLM_API_KEY');
+// 调用大模型生成大纲；应用运行时的连接信息只允许来自后端环境变量。
+// trustedConfig 仅用于服务器内部调用或单元测试，绝不能直接传入 HTTP 请求数据。
+// 无 Key 或调用失败时回退本地模板，保证主流程不中断。
+export async function generateOutlineWithLLM(analysis, supplements = [], trustedConfig = {}) {
+  const apiKey = trustedConfig.apiKey || env('LLM_API_KEY');
   if (!apiKey) {
     return { source: 'local', slides: generateOutline(analysis, supplements) };
   }
 
-  const baseUrl = (config.baseUrl || env('LLM_BASE_URL') || 'https://api.openai.com/v1').replace(/\/+$/, '');
-  const model = config.model || env('LLM_MODEL') || 'gpt-4o-mini';
-  const temperature = typeof config.temperature === 'number' ? config.temperature : 0.3;
+  const baseUrl = (trustedConfig.baseUrl || env('LLM_BASE_URL') || 'https://api.deepseek.com').replace(/\/+$/, '');
+  const model = trustedConfig.model || env('LLM_MODEL') || 'deepseek-chat';
+  const configuredTimeout = Number(trustedConfig.timeoutMs || env('LLM_TIMEOUT_MS'));
+  const timeoutMs = Number.isFinite(configuredTimeout)
+    ? Math.min(Math.max(configuredTimeout, 5000), 120000)
+    : 45000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const resp = await fetch(baseUrl + '/chat/completions', {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer ' + apiKey,
       },
       body: JSON.stringify({
         model,
-        temperature,
+        temperature: 0.3,
         messages: [
           { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: buildUserPrompt(analysis, supplements) },
@@ -115,8 +129,7 @@ export async function generateOutlineWithLLM(analysis, supplements = [], config 
     });
 
     if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error('LLM 请求失败（' + resp.status + '）：' + text.slice(0, 200));
+      throw new Error('LLM 请求失败（HTTP ' + resp.status + '）');
     }
 
     const data = await resp.json();
@@ -128,10 +141,15 @@ export async function generateOutlineWithLLM(analysis, supplements = [], config 
 
     return { source: 'llm', slides };
   } catch (error) {
+    const warning = error && error.name === 'AbortError'
+      ? 'LLM 请求超时，请稍后重试'
+      : error && error.message ? error.message : String(error);
     return {
       source: 'local',
       slides: generateOutline(analysis, supplements),
-      warning: error && error.message ? error.message : String(error),
+      warning,
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

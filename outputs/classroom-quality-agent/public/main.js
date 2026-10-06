@@ -335,38 +335,6 @@ function downloadPptx(filename) {
     });
 }
 
-// —— AI 生成（接大模型 API）相关 ——
-const AI_CONFIG_KEY = 'cq-agent-ai-config';
-
-// 从三个输入框读取 API 配置并保存到本地，避免每次刷新都重新填。
-function readAiConfig() {
-  const config = {
-    apiKey: $('#ai-apikey').value.trim(),
-    baseUrl: $('#ai-baseurl').value.trim(),
-    model: $('#ai-model').value.trim(),
-  };
-  try {
-    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(config));
-  } catch {
-    /* localStorage 不可用时静默忽略 */
-  }
-  return config;
-}
-
-// 从本地存储恢复 API 配置到输入框。
-function restoreAiConfig() {
-  let saved = null;
-  try {
-    saved = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || 'null');
-  } catch {
-    saved = null;
-  }
-  if (!saved) return;
-  $('#ai-apikey').value = saved.apiKey || '';
-  $('#ai-baseurl').value = saved.baseUrl || '';
-  $('#ai-model').value = saved.model || '';
-}
-
 // 显示 AI 生成状态提示。
 function showAiStatus(text) {
   const host = $('#ai-status');
@@ -387,7 +355,6 @@ async function generateWithAI() {
     state.selectedSupplements.has(item.id),
   );
   const filteredAnalysis = { ...state.analysis, knowledgePoints };
-  const config = readAiConfig();
 
   const btn = $('#btn-ai-generate');
   const original = btn.textContent;
@@ -399,7 +366,7 @@ async function generateWithAI() {
     const resp = await fetch('/api/generate-outline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ analysis: filteredAnalysis, supplements, config }),
+      body: JSON.stringify({ analysis: filteredAnalysis, supplements }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.error || '请求失败（' + resp.status + '）');
@@ -467,9 +434,6 @@ function bindEvents() {
   $('#btn-to-review').addEventListener('click', () => navigateTo(5));
 
   $('#btn-ai-generate').addEventListener('click', generateWithAI);
-  ['#ai-apikey', '#ai-baseurl', '#ai-model'].forEach((selector) => {
-    $(selector).addEventListener('change', readAiConfig);
-  });
 
   $('#btn-export-md').addEventListener('click', () =>
     download('PPT初稿-Sprint1.md', toMarkdown(state.slides)),
@@ -530,4 +494,3 @@ function renderFileChips() {
 bindEvents();
 seedSampleIfEmpty();
 renderFileChips();
-restoreAiConfig();
