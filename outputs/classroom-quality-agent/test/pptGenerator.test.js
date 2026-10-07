@@ -73,3 +73,32 @@ test('导出 Markdown 会过滤已删除的幻灯片', () => {
   assert.ok(markdown.includes('## 导入'));
   assert.ok(markdown.includes('## 总结'));
 });
+
+test('正式 Markdown 只包含已确认内容', () => {
+  const slides = generateOutline(ANALYSIS, SUPPLEMENTS).map((slide, index) => ({
+    ...slide,
+    status: index === 0 ? 'confirmed' : index === 1 ? 'deleted' : 'pending',
+  }));
+  const markdown = toMarkdown(slides, { confirmedOnly: true });
+  assert.ok(markdown.includes('课程导入'));
+  assert.ok(!markdown.includes(slides[1].title));
+  assert.ok(!markdown.includes('课堂互动与讨论'));
+});
+
+test('生成页包含可供视觉导出的布局字段', () => {
+  const slides = generateOutline(ANALYSIS, SUPPLEMENTS);
+  assert.equal(slides[0].layout, 'intro');
+  assert.equal(slides.at(-1).layout, 'summary');
+  assert.equal(slides.find((slide) => slide.section === '互动').layout, 'interaction');
+  assert.ok(slides.filter((slide) => slide.section === '讲解').every((slide) => slide.layout));
+});
+
+test('没有行业案例补充时仍保留完整的导入讲解互动总结流程', () => {
+  const slides = generateOutline(ANALYSIS, []);
+  const sections = slides.map((slide) => slide.section);
+  assert.equal(sections[0], '导入');
+  assert.equal(sections.at(-1), '总结');
+  assert.ok(sections.includes('讲解'));
+  assert.ok(sections.includes('互动'));
+  assert.ok(!sections.includes('案例'));
+});

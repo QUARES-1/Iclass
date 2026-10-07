@@ -76,18 +76,24 @@ classroom-quality-agent/
 │   ├── main.js               # 交互与流程串联
 │   ├── sample.js             # 示例教学资料
 │   └── vendor/               # 第三方库（PptxGenJS）
-└── test/                     # 单元测试（node --test）
-    ├── analyzer.test.js
-    ├── frontier.test.js
-    ├── pptGenerator.test.js
-    ├── pptExport.test.js
-    └── review.test.js
+├── test/                     # 单元、接口与流程测试（node --test）
+│   ├── analyzer.test.js
+│   ├── fileParser.test.js
+│   ├── frontier.test.js
+│   ├── llm.test.js
+│   ├── pptGenerator.test.js
+│   ├── pptExport.test.js
+│   ├── review.test.js
+│   ├── server.test.js
+│   ├── sprint1-flow.test.js
+│   └── ui-contract.test.js
+└── test-support/             # 测试夹具与辅助函数
 ```
 
 ## 六、DoD（完成定义）
 
 - ① 代码能跑：`npm start` 可启动，浏览器可完整走完 5 步流程。
-- ② 有基本测试：`npm test` 共 19 个单元测试，覆盖解析、匹配、生成、导出、审核关键路径。
+- ② 有完整测试：`npm test` 共 88 项测试，覆盖资料解析、AI 回退、前沿匹配、PPT 生成与正式导出、人工审核、服务端接口、页面契约和 Sprint 1 主流程。
 - ③ 有代码注释：`src/` 与 `server.js` 关键函数/模块均有中文注释。
 - ④ 代码已审查：所有 AI 生成内容均通过人工审核步骤合入。
 

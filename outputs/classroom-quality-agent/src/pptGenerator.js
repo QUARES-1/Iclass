@@ -144,11 +144,12 @@ export function generateOutline(analysis, supplements = []) {
 }
 
 // 把 PPT 大纲序列化为 Markdown 文本，便于教师导出与进一步编辑。
-export function toMarkdown(slides) {
+export function toMarkdown(slides, options = {}) {
   const sections = ['导入', '讲解', '案例', '互动', '总结'];
   const lines = ['# PPT 初稿（Sprint 1 课前智能备课）', ''];
   // 过滤掉“已删除”的幻灯片，确保人工审核中删除的内容不会出现在导出的大纲里。
-  const active = (slides || []).filter((slide) => slide.status !== 'deleted');
+  const active = (slides || []).filter((slide) => slide.status !== 'deleted'
+    && (!options.confirmedOnly || slide.status === 'confirmed'));
 
   for (const section of sections) {
     const group = active.filter((slide) => slide.section === section);

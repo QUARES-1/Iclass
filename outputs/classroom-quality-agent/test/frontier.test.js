@@ -41,3 +41,22 @@ test('知识库能匹配排序之外的主题', () => {
 test('知识库已扩充到覆盖多种主题', () => {
   assert.ok(FRONTIER_KB.length >= 20);
 });
+
+test('英文关键词匹配不区分大小写', () => {
+  const result = matchSupplements(['使用 QUICKSORT 完成排序']);
+  assert.ok(result.some((item) => item.id === 'f-01'));
+});
+
+test('支持注入自定义知识库且返回命中的原始知识点', () => {
+  const custom = [{
+    id: 'custom-1',
+    keywords: ['线性表'],
+    title: '自定义案例',
+    type: '案例',
+    description: '测试',
+    source: '测试来源',
+  }];
+  const result = matchSupplements(['线性表的定义'], custom);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].matchedBy, '线性表的定义');
+});

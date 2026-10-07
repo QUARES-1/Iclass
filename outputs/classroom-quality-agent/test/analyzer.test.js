@@ -58,3 +58,52 @@ test('支持“教学目标：……”这类行内写法', () => {
   assert.deepEqual(result.keyPoints, ['链表的插入与删除。']);
   assert.deepEqual(result.difficultPoints, ['指针与内存管理。']);
 });
+
+test('空输入返回完整但为空的结构', () => {
+  assert.deepEqual(analyzeMaterial(''), {
+    chapters: [],
+    objectives: [],
+    keyPoints: [],
+    difficultPoints: [],
+    knowledgePoints: [],
+  });
+  assert.deepEqual(analyzeMaterials([]), {
+    chapters: [],
+    objectives: [],
+    keyPoints: [],
+    difficultPoints: [],
+    knowledgePoints: [],
+  });
+});
+
+test('无区块标题时只把编号项作为知识点兜底', () => {
+  const result = analyzeMaterial([
+    '这是课程背景说明，不应自动成为知识点。',
+    '1. 线性表的定义',
+    '- 顺序表的存储结构',
+    '普通说明段落。',
+  ].join('\n'));
+  assert.deepEqual(result.knowledgePoints, ['线性表的定义', '顺序表的存储结构']);
+  assert.ok(!result.knowledgePoints.includes('普通说明段落。'));
+});
+
+test('支持中文章节编号并清理列表前缀', () => {
+  const result = analyzeMaterial([
+    '第十章 图',
+    '知识点',
+    '（一）图的存储结构',
+    '2．图的遍历',
+  ].join('\n'));
+  assert.deepEqual(result.chapters, ['第十章 图']);
+  assert.deepEqual(result.knowledgePoints, ['图的存储结构', '图的遍历']);
+});
+
+test('多材料合并会清理空内容且保持首次出现顺序', () => {
+  const result = analyzeMaterials([
+    { content: '教学目标：理解线性表。\n知识点：顺序表' },
+    { content: '教学目标：理解线性表。\n知识点：链表' },
+    null,
+  ]);
+  assert.deepEqual(result.objectives, ['理解线性表。']);
+  assert.deepEqual(result.knowledgePoints, ['顺序表', '链表']);
+});

@@ -484,9 +484,16 @@ function downloadBlob(filename, blob) {
 }
 
 // 生成并下载真正的 PowerPoint（.pptx）文件。
-function downloadPptx(filename) {
+function downloadPptx(filename, options = {}) {
   if (!state.slides.length) {
     alert('还没有可导出的 PPT 内容，请先生成 PPT。');
+    return;
+  }
+  const hasExportableSlide = state.slides.some((slide) =>
+    slide.status !== SLIDE_STATUS.DELETED
+      && (!options.confirmedOnly || slide.status === SLIDE_STATUS.CONFIRMED));
+  if (!hasExportableSlide) {
+    alert(options.confirmedOnly ? '还没有已确认的内容，无法导出正式稿。' : '没有可导出的 PPT 内容。');
     return;
   }
   const PptxGenJS = window.PptxGenJS;
@@ -495,7 +502,10 @@ function downloadPptx(filename) {
     return;
   }
   const coverContent = deriveCoverContent(state.analysis || {}, state.slides);
-  const model = slidesToExportModel(state.slides, coverContent);
+  const model = slidesToExportModel(state.slides, {
+    ...coverContent,
+    confirmedOnly: Boolean(options.confirmedOnly),
+  });
   const pptx = buildPresentation(model, PptxGenJS);
   pptx.write({ outputType: 'blob' })
     .then((blob) => downloadBlob(filename, blob))
@@ -650,10 +660,10 @@ function bindEvents() {
     downloadPptx('PPT初稿-Sprint1.pptx'),
   );
   $('#btn-export-final').addEventListener('click', () =>
-    download('PPT最终稿-Sprint1.md', toMarkdown(state.slides)),
+    download('PPT最终稿-Sprint1.md', toMarkdown(state.slides, { confirmedOnly: true })),
   );
   $('#btn-export-pptx-final').addEventListener('click', () =>
-    downloadPptx('PPT最终稿-Sprint1.pptx'),
+    downloadPptx('PPT最终稿-Sprint1.pptx', { confirmedOnly: true }),
   );
 
   $$('.step').forEach((btn) =>

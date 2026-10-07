@@ -255,7 +255,7 @@ async function handleExtractFile(req, res, requestUrl) {
   }
 }
 
-const server = http.createServer((req, res) => {
+export const server = http.createServer((req, res) => {
   const url = req.url || '/';
   const requestUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
 
@@ -343,6 +343,11 @@ server.on('error', (error) => {
   console.error('服务器启动失败：' + ((error && error.message) || error));
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`课堂质量改进智能体已启动：http://${HOST}:${PORT}`);
-});
+const isMainModule = process.argv[1]
+  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  server.listen(PORT, HOST, () => {
+    console.log(`课堂质量改进智能体已启动：http://${HOST}:${PORT}`);
+  });
+}

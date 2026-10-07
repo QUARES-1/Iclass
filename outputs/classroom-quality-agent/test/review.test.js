@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   setSlideStatus,
+  confirmAllSlides,
   updateSlide,
   summarizeReview,
   isReviewComplete,
@@ -47,4 +48,32 @@ test('只有全部幻灯片确认或删除后才算审核完成', () => {
   const incomplete = setSlideStatus(SLIDES, 's1', SLIDE_STATUS.CONFIRMED);
   assert.equal(isReviewComplete(incomplete), false);
   assert.equal(unconfirmedSlides(incomplete).length, 2);
+});
+
+test('全部确认会确认所有未删除页面并保留已删除状态', () => {
+  const input = [
+    { id: 's1', title: 'A', status: SLIDE_STATUS.PENDING },
+    { id: 's2', title: 'B', status: SLIDE_STATUS.CONFIRMED },
+    { id: 's3', title: 'C', status: SLIDE_STATUS.DELETED },
+  ];
+  const next = confirmAllSlides(input);
+  assert.deepEqual(next.map((slide) => slide.status), [
+    SLIDE_STATUS.CONFIRMED,
+    SLIDE_STATUS.CONFIRMED,
+    SLIDE_STATUS.DELETED,
+  ]);
+  assert.equal(isReviewComplete(next), true);
+});
+
+test('状态和内容更新不会修改原数组', () => {
+  const original = structuredClone(SLIDES);
+  setSlideStatus(SLIDES, 's1', SLIDE_STATUS.CONFIRMED);
+  updateSlide(SLIDES, 's2', { title: '修改后' });
+  confirmAllSlides(SLIDES);
+  assert.deepEqual(SLIDES, original);
+});
+
+test('更新不存在的幻灯片不会改变任何内容', () => {
+  assert.deepEqual(setSlideStatus(SLIDES, 'missing', SLIDE_STATUS.DELETED), SLIDES);
+  assert.deepEqual(updateSlide(SLIDES, 'missing', { title: 'X' }), SLIDES);
 });

@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import {
   buildSystemPrompt,
   buildUserPrompt,
+  buildAnalysisSystemPrompt,
+  buildAnalysisUserPrompt,
   extractJson,
+  normalizeAnalysis,
   normalizeSlides,
+  analyzeMaterialsWithLLM,
   generateOutlineWithLLM,
 } from '../src/llm.js';
 
@@ -83,4 +87,133 @@ test('调用失败时回退本地模板并带 warning', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('内容理解提示要求五类字段完整且不得虚构', () => {
+  const prompt = buildAnalysisSystemPrompt();
+  assert.ok(prompt.includes('chapters'));
+  assert.ok(prompt.includes('knowledgePoints'));
+  assert.ok(prompt.includes('不得虚构'));
+  assert.ok(prompt.includes('不得为空'));
+});
+
+test('内容理解用户提示包含资料标题、类型和正文', () => {
+  const prompt = buildAnalysisUserPrompt([
+    { title: '线性表讲义', type: '教案', content: '线性表由有限个数据元素组成。' },
+  ]);
+  assert.ok(prompt.includes('线性表讲义'));
+  assert.ok(prompt.includes('教案'));
+  assert.ok(prompt.includes('有限个数据元素'));
+});
+
+test('过长教学资料会截断且保留首尾内容', () => {
+  const content = 'A'.repeat(40000) + '中间' + 'B'.repeat(40000);
+  const prompt = buildAnalysisUserPrompt([{ title: '长资料', type: '教材', content }]);
+  assert.ok(prompt.includes('[中间内容因长度限制省略]'));
+  assert.ok(prompt.includes('A'.repeat(100)));
+  assert.ok(prompt.includes('B'.repeat(100)));
+  assert.ok(prompt.length < content.length);
+});
+
+test('normalizeAnalysis 支持别名、去重、清理空白和数量限制', () => {
+  const result = normalizeAnalysis({
+    章节: [' 第一章 线性表 ', '第一章 线性表'],
+    教学目标: ['理解  线性表'],
+    knowledge_points: Array.from({ length: 25 }, (_, index) => `知识点 ${index + 1}`),
+    重点: ['顺序表'],
+    难点: ['链表指针'],
+  });
+  assert.deepEqual(result.chapters, ['第一章 线性表']);
+  assert.deepEqual(result.objectives, ['理解 线性表']);
+  assert.equal(result.knowledgePoints.length, 20);
+  assert.deepEqual(result.keyPoints, ['顺序表']);
+  assert.deepEqual(result.difficultPoints, ['链表指针']);
+  assert.equal(normalizeAnalysis({}), null);
+});
+
+test('AI 内容理解成功时返回完整结构并使用后端配置', async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({
+          analysis: {
+            chapters: ['第2章 线性表'],
+            objectives: ['理解线性表'],
+            knowledgePoints: ['顺序表', '链表'],
+            keyPoints: ['顺序表'],
+            difficultPoints: ['链表指针'],
+          },
+        }) } }],
+      }),
+    };
+  };
+  try {
+    const result = await analyzeMaterialsWithLLM(
+      [{ title: '线性表', type: '教案', content: '线性表与链表指针' }],
+      { apiKey: 'test-key', baseUrl: 'https://api.example.com/v1/', model: 'test-model' },
+    );
+    assert.equal(result.source, 'llm');
+    assert.deepEqual(result.analysis.keyPoints, ['顺序表']);
+    assert.equal(request.url, 'https://api.example.com/v1/chat/completions');
+    assert.equal(request.options.headers.Authorization, 'Bearer test-key');
+    const body = JSON.parse(request.options.body);
+    assert.equal(body.model, 'test-model');
+    assert.equal(body.response_format.type, 'json_object');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('AI 内容理解结果缺少重点或难点时回退本地解析', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      analysis: {
+        chapters: ['第2章 线性表'],
+        objectives: ['理解线性表'],
+        knowledgePoints: ['顺序表'],
+        keyPoints: [],
+        difficultPoints: [],
+      },
+    }) } }] }),
+  });
+  try {
+    const result = await analyzeMaterialsWithLLM(
+      [{ title: '线性表', type: '教案', content: '教学目标：理解线性表。\n教学重点：顺序表。\n教学难点：链表指针。' }],
+      { apiKey: 'test-key' },
+    );
+    assert.equal(result.source, 'local');
+    assert.match(result.warning, /不完整/);
+    assert.deepEqual(result.analysis.keyPoints, ['顺序表。']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('extractJson 对空文本和损坏 JSON 返回 null', () => {
+  assert.equal(extractJson(''), null);
+  assert.equal(extractJson('```json\n{"slides": [}\n```'), null);
+});
+
+test('normalizeSlides 清理正文并保留 AI 示例与反例', () => {
+  const slides = normalizeSlides({ slides: [{
+    section: '未知环节',
+    title: ' 线性表定义 ',
+    bullets: [' 要点 ', 2, null],
+    notes: [' 备注 '],
+    example: ' 顺序表 ',
+    counterExample: ' 无限序列 ',
+  }] });
+  assert.equal(slides[0].section, '讲解');
+  assert.deepEqual(slides[0].bullets, ['要点', '2']);
+  assert.deepEqual(slides[0].notes, ['备注']);
+  assert.equal(slides[0].example, '顺序表');
+  assert.equal(slides[0].counterExample, '无限序列');
 });

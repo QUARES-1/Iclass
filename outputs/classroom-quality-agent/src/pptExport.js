@@ -249,10 +249,11 @@ export function selectSlideLayout(item = {}) {
   return 'concept';
 }
 
-// 保留原有规则：仅排除“已删除”，不改变待确认/已确认状态的业务含义。
+// 初稿排除“已删除”；正式稿通过 confirmedOnly 仅保留“已确认”内容。
 export function slidesToExportModel(slides, options = {}) {
   const items = (slides || [])
-    .filter((slide) => slide.status !== 'deleted')
+    .filter((slide) => slide.status !== 'deleted'
+      && (!options.confirmedOnly || slide.status === 'confirmed'))
     .flatMap((slide) => {
       const item = {
         section: slide.section,

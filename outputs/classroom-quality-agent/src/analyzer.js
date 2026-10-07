@@ -23,6 +23,7 @@ function stripNumberPrefix(line) {
     .replace(/^[（(]?\d+[）)、.．、]\s*/, '')
     .replace(/^[（(]?[一二三四五六七八九十]+[）)、.．、]\s*/, '')
     .replace(/^[（(][一二三四五六七八九十]+[）)]\s*/, '')
+    .replace(/^[-*•·●]\s*/, '')
     .trim();
 }
 
@@ -36,8 +37,11 @@ function splitLines(text) {
 
 // 判断某行是否属于指定的内容区块标题。
 function detectSection(line) {
+  const normalized = stripNumberPrefix(line);
   for (const [section, labels] of Object.entries(SECTION_LABELS)) {
-    if (labels.some((label) => line.includes(label))) {
+    if (labels.some((label) => normalized === label
+      || normalized.startsWith(label + '：')
+      || normalized.startsWith(label + ':'))) {
       return section;
     }
   }
@@ -142,7 +146,7 @@ export function analyzeMaterials(materials) {
   };
 
   for (const material of materials || []) {
-    const parsed = analyzeMaterial(material.content || '');
+    const parsed = analyzeMaterial(material?.content || '');
     merged.chapters.push(...parsed.chapters);
     merged.objectives.push(...parsed.objectives);
     merged.keyPoints.push(...parsed.keyPoints);
