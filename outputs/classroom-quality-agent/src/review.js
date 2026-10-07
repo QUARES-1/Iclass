@@ -16,6 +16,15 @@ export function setSlideStatus(slides, slideId, status) {
   );
 }
 
+// 一次确认所有未删除幻灯片；已删除内容保持原状态，不会被意外恢复。
+export function confirmAllSlides(slides) {
+  return slides.map((slide) =>
+    slide.status === SLIDE_STATUS.DELETED
+      ? slide
+      : { ...slide, status: SLIDE_STATUS.CONFIRMED },
+  );
+}
+
 // 更新单张幻灯片的内容（标题或正文要点）。
 export function updateSlide(slides, slideId, patch = {}) {
   return slides.map((slide) => (slide.id === slideId ? { ...slide, ...patch } : slide));

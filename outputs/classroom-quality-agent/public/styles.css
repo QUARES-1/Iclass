@@ -376,16 +376,6 @@ textarea:focus {
   color: #166534;
 }
 
-.pill-verify {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.pill-ok {
-  background: #dcfce7;
-  color: #166534;
-}
-
 .slide {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -460,6 +450,154 @@ textarea:focus {
   padding-left: 10px;
 }
 
+/* PPT 语义化预览：对应导出课件中的不同教学布局。 */
+.layout-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+
+.preview-grid-item {
+  min-height: 88px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-grid-item b { color: #2563eb; font-size: 18px; }
+.preview-grid-item span { font-size: 14px; }
+
+.preview-split,
+.preview-definition {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 20px;
+}
+
+.preview-steps {
+  margin: 0;
+  padding-left: 30px;
+  border-right: 1px solid var(--border);
+}
+
+.preview-steps li { padding: 6px 16px 6px 4px; }
+
+.preview-steps-wide {
+  border-right: 0;
+  padding-right: 18px;
+}
+
+.preview-metrics {
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-metrics span {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.preview-definition > div { min-height: 120px; padding: 8px 14px; }
+.preview-definition > div + div { border-left: 1px solid var(--border); }
+.preview-definition b { color: var(--primary); font-size: 13px; }
+.preview-definition p { margin: 10px 0; font-size: 14px; }
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.preview-table th,
+.preview-table td {
+  border: 1px solid var(--border);
+  text-align: left;
+  padding: 9px 12px;
+}
+
+.preview-table th { background: var(--primary); color: #fff; }
+.preview-table tr:nth-child(even) td { background: #f6f7ff; }
+
+.preview-timeline { position: relative; padding-left: 6px; }
+.preview-timeline::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  bottom: 18px;
+  width: 1px;
+  background: var(--border);
+}
+
+.preview-timeline > div {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px 130px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0;
+}
+
+.preview-timeline b {
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #059669;
+  color: #fff;
+  font-size: 12px;
+}
+
+.preview-timeline strong { color: #047857; font-size: 13px; }
+.preview-timeline span { font-size: 13px; }
+
+.preview-question {
+  padding: 20px;
+  background: #fffbeb;
+  border-left: 4px solid #d97706;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.preview-prompts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.preview-prompts span { flex: 1 1 220px; font-size: 13px; border-bottom: 1px solid var(--border); padding: 7px 0; }
+
+.preview-map {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.preview-map strong {
+  grid-column: 1 / -1;
+  justify-self: center;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  padding: 8px 22px;
+  background: #fef2f2;
+}
+
+.preview-map span { text-align: center; padding: 12px; border-bottom: 2px solid #fecaca; font-size: 13px; }
+
 .review-tools {
   display: flex;
   gap: 8px;
@@ -473,7 +611,8 @@ textarea:focus {
 }
 
 .slide-edit-title,
-.slide-edit-bullets {
+.slide-edit-bullets,
+.slide-edit-extra {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -485,6 +624,20 @@ textarea:focus {
 
 .slide-edit-bullets {
   min-height: 90px;
+  resize: vertical;
+}
+
+.review-extra-field {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.slide-edit-extra {
+  min-height: 58px;
+  margin-top: 4px;
   resize: vertical;
 }
 
@@ -557,6 +710,19 @@ textarea:focus {
     flex-direction: column;
     align-items: flex-start;
   }
+  .preview-grid,
+  .preview-split,
+  .preview-definition,
+  .preview-map {
+    grid-template-columns: 1fr;
+  }
+  .preview-definition > div + div,
+  .preview-steps {
+    border-left: 0;
+    border-right: 0;
+  }
+  .preview-map strong { grid-column: auto; }
+  .preview-timeline > div { grid-template-columns: 36px 95px 1fr; }
 }
 
 /* —— AI 生成（接大模型 API）—— */
@@ -566,14 +732,6 @@ textarea:focus {
   align-items: center;
   gap: 12px;
   margin: 12px 0 16px;
-}
-.ai-config-note {
-  flex: 1 1 100%;
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin: 0;
 }
 .ai-status {
   font-size: 13px;

@@ -86,7 +86,7 @@
     <!-- 步骤3：前沿补充 -->
     <section class="panel" data-panel="3">
       <h2>③ 前沿技术 / 行业案例补充</h2>
-      <p class="muted">围绕课程主题匹配最新技术与行业案例，每条均标注来源与待核验状态。可勾选要纳入 PPT 的内容。</p>
+      <p class="muted">围绕课程主题匹配最新技术与行业案例，可勾选要纳入 PPT 的内容。</p>
       <div id="supplement-result" class="supplement-result"></div>
       <div class="panel-actions between">
         <button class="btn btn-ghost" data-prev>← 返回</button>
@@ -99,8 +99,7 @@
       <h2>④ PPT 大纲与初稿</h2>
       <p class="muted">按“导入 → 讲解 → 案例 → 互动 → 总结”结构组织 PPT 初稿，可导出为 Markdown。</p>
       <div class="ai-toolbar">
-        <p class="muted ai-config-note">🤖 AI 连接由后端环境变量安全配置；浏览器不会接触或保存 API Key。未配置时自动使用本地模板。</p>
-        <button class="btn btn-ghost" id="btn-ai-generate">🤖 AI 重新生成 PPT</button>
+        <button class="btn btn-ghost" id="btn-ai-generate">🤖 AI 生成 PPT</button>
         <span class="ai-status" id="ai-status"></span>
       </div>
       <div id="ppt-preview" class="ppt-preview"></div>
@@ -123,6 +122,7 @@
       <div class="panel-actions between">
         <button class="btn btn-ghost" data-prev>← 返回</button>
         <div class="actions-right">
+          <button class="btn btn-primary" id="btn-confirm-all" disabled>全部确认</button>
           <button class="btn btn-ghost" id="btn-export-final">导出 Markdown 大纲</button>
           <button class="btn btn-primary" id="btn-export-pptx-final">下载 PPT（.pptx）</button>
         </div>

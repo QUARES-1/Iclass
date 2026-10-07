@@ -23,15 +23,24 @@ function containsAny(text, list) {
 }
 
 // 构造一张幻灯片。bullets 为正文要点，notes 为讲解备注，status 初始为待审核。
-function makeSlide(nextId, section, title, bullets, notes = []) {
+function makeSlide(nextId, section, title, bullets, notes = [], options = {}) {
   return {
     id: nextId(),
     section,
     title,
     bullets: (bullets || []).filter(Boolean),
     notes: (notes || []).filter(Boolean),
+    ...options,
     status: 'pending',
   };
+}
+
+// 只提供可选的视觉语义，不改变教学内容与审核状态。
+function inferKnowledgeLayout(point) {
+  const text = String(point || '');
+  if (/比较|对比|区别|选择|复杂度/.test(text)) return 'comparison';
+  if (/算法|排序|查找|遍历|递归|分治|动态规划|贪心|回溯/.test(text)) return 'algorithm';
+  return 'concept';
 }
 
 // 生成互动提问：把教学目标转化为课堂提问，引导学生思考。
@@ -51,10 +60,17 @@ export function generateOutline(analysis, supplements = []) {
 
   // 1) 导入：用教学目标 + 问题驱动引入本章主题。
   const introBullets = [
-    ...analysis.objectives.slice(0, 4).map((o) => `学习目标：${o}`),
+    ...analysis.objectives.slice(0, 3).map((o) => `学习目标：${o}`),
     '以一个贴近实际的工程问题引入本章核心主题',
   ];
-  slides.push(makeSlide(nextId, '导入', '课程导入', introBullets, ['通过问题驱动，激活学生的已有认知。']));
+  slides.push(makeSlide(
+    nextId,
+    '导入',
+    '课程导入',
+    introBullets,
+    ['通过问题驱动，激活学生的已有认知。'],
+    { layout: 'intro' },
+  ));
 
   // 2) 讲解：每个知识点一张幻灯片，并标注重点/难点。
   for (const point of analysis.knowledgePoints) {
@@ -78,7 +94,10 @@ export function generateOutline(analysis, supplements = []) {
       `[${item.type}·${item.needsVerify ? '待核验' : '已核验'}] ${item.title}：${item.description}（来源：${item.source}）`,
     );
 
-    slides.push(makeSlide(nextId, '讲解', point, bullets, notes));
+    slides.push(makeSlide(nextId, '讲解', point, bullets, notes, {
+      layout: inferKnowledgeLayout(point),
+      emphasis: tags,
+    }));
   }
 
   // 3) 案例：来自前沿补充中的行业案例。
@@ -91,12 +110,20 @@ export function generateOutline(analysis, supplements = []) {
         '行业案例与应用',
         cases.map((item) => `${item.title}：${item.description}`),
         cases.map((item) => `来源：${item.source}（${item.needsVerify ? '待核验' : '已核验'}）`),
+        { layout: 'case' },
       ),
     );
   }
 
   // 4) 互动：由教学目标转化为课堂提问。
-  slides.push(makeSlide(nextId, '互动', '课堂互动与讨论', buildInteractionQuestions(analysis)));
+  slides.push(makeSlide(
+    nextId,
+    '互动',
+    '课堂互动与讨论',
+    buildInteractionQuestions(analysis),
+    [],
+    { layout: 'interaction' },
+  ));
 
   // 5) 总结：归纳重点，给出复习与下一步建议。
   const summaryBullets = [
@@ -104,7 +131,14 @@ export function generateOutline(analysis, supplements = []) {
     ...(analysis.difficultPoints.length ? ['难点提示：' + analysis.difficultPoints.join('；')] : []),
     '课后复习：整理知识点并完成思考题',
   ];
-  slides.push(makeSlide(nextId, '总结', '本章总结', summaryBullets, ['下一节课将结合学生反馈进行针对性复习与优化。']));
+  slides.push(makeSlide(
+    nextId,
+    '总结',
+    '本章总结',
+    summaryBullets,
+    ['下一节课将结合学生反馈进行针对性复习与优化。'],
+    { layout: 'summary' },
+  ));
 
   return slides;
 }

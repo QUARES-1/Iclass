@@ -5,9 +5,15 @@
 import { analyzeMaterials } from '../src/analyzer.js';
 import { matchSupplements } from '../src/frontier.js';
 import { generateOutline, toMarkdown } from '../src/pptGenerator.js';
-import { slidesToExportModel, buildPresentation, deriveCoverContent } from '../src/pptExport.js';
+import {
+  slidesToExportModel,
+  buildPresentation,
+  deriveCoverContent,
+  selectSlideLayout,
+} from '../src/pptExport.js';
 import {
   setSlideStatus,
+  confirmAllSlides,
   updateSlide,
   summarizeReview,
   isReviewComplete,
@@ -21,6 +27,8 @@ const state = {
   step: 1,
   uploads: [],            // 通过文件上传额外导入的资料
   analysis: null,         // 内容理解结果
+  analysisSource: null,   // llm 或 local，用于向教师说明解析来源
+  analysisWarning: '',    // AI 失败并回退本地规则时的提示
   supplements: [],        // 匹配到的前沿补充
   selectedPoints: new Set(),     // 纳入 PPT 的知识点
   selectedSupplements: new Set(),// 纳入 PPT 的补充 id
@@ -99,15 +107,40 @@ async function readUploadedFile(file) {
   throw new Error('不支持该文件类型');
 }
 
-// 步骤①→②：解析资料并初始化“内容理解”与“前沿补充”的默认选择。
-function ensureAnalysis() {
-  if (state.analysis) return;
+async function requestMaterialAnalysis(materials) {
+  const response = await fetch('/api/analyze-materials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ materials }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `内容理解请求失败（${response.status}）`);
+  if (!data.analysis || typeof data.analysis !== 'object') throw new Error('后端未返回有效的内容理解结果');
+  return data;
+}
+
+// 步骤①→②：优先使用后端 AI 解析；网络或服务异常时回退现有本地规则。
+async function ensureAnalysis() {
+  if (state.analysis) return state.analysis;
   const materials = collectMaterials();
-  state.analysis = analyzeMaterials(materials);
+  let result;
+  try {
+    result = await requestMaterialAnalysis(materials);
+  } catch (error) {
+    result = {
+      source: 'local',
+      analysis: analyzeMaterials(materials),
+      warning: error && error.message ? error.message : String(error),
+    };
+  }
+  state.analysis = result.analysis;
+  state.analysisSource = result.source || 'local';
+  state.analysisWarning = result.warning || '';
   state.supplements = matchSupplements(state.analysis.knowledgePoints);
   state.selectedPoints = new Set(state.analysis.knowledgePoints);
   state.selectedSupplements = new Set(state.supplements.map((item) => item.id));
   state.slides = [];
+  return state.analysis;
 }
 
 // 步骤③→④：根据用户勾选的知识点与补充生成 PPT 大纲。
@@ -132,8 +165,8 @@ function goTo(step) {
 }
 
 // 带前置依赖校验的导航：进入后续步骤前自动补齐缺失的计算结果。
-function navigateTo(step) {
-  if (step >= 2) ensureAnalysis();
+async function navigateTo(step) {
+  if (step >= 2) await ensureAnalysis();
   if (step >= 4) ensureSlides();
   goTo(step);
   render();
@@ -147,6 +180,9 @@ function renderAnalysis() {
     return;
   }
   const a = state.analysis;
+  const sourceBanner = state.analysisSource === 'llm'
+    ? '<div class="success-banner">✓ AI 内容理解完成，已根据资料语义提取章节、目标、知识点、重点和难点。</div>'
+    : `<div class="warn-banner">已使用本地规则完成解析${state.analysisWarning ? `：${esc(state.analysisWarning)}` : '。如需语义识别，请检查后端 AI 配置。'}</div>`;
 
   const tags = (items, extraClass = '') =>
     items.length
@@ -163,7 +199,7 @@ function renderAnalysis() {
     )
     .join('');
 
-  host.innerHTML = `
+  host.innerHTML = `${sourceBanner}
     <div class="cards">
       <div class="card"><h3>📚 章节</h3>${tags(a.chapters)}</div>
       <div class="card"><h3>🎯 教学目标</h3>${tags(a.objectives)}</div>
@@ -202,7 +238,6 @@ function renderSupplements() {
           <div class="supplement-meta">
             <span class="pill ${item.type === '技术' ? 'pill-tech' : 'pill-case'}">${item.type}</span>
             <span>来源：${esc(item.source)}</span>
-            <span class="pill ${item.needsVerify ? 'pill-verify' : 'pill-ok'}">${item.needsVerify ? '待核验' : '已核验'}</span>
             <span>匹配自：${esc(item.matchedBy)}</span>
           </div>
         </div>
@@ -220,6 +255,81 @@ function renderSupplements() {
   });
 }
 
+const PREVIEW_LAYOUT_LABELS = {
+  intro: '情境导入',
+  concept: '概念辨析',
+  algorithm: '步骤讲解',
+  comparison: '比较矩阵',
+  case: '案例路径',
+  interaction: '课堂互动',
+  summary: '知识地图',
+};
+
+function splitPreviewLabel(text, fallback) {
+  const match = String(text || '').match(/^([^：:]{1,12})[：:]\s*(.+)$/);
+  return match ? [match[1], match[2]] : [fallback, String(text || '')];
+}
+
+function renderPreviewBody(slide, layout) {
+  const bullets = Array.isArray(slide.bullets)
+    ? slide.bullets.slice(0, layout === 'summary' ? 6 : 4)
+    : [];
+  if (layout === 'intro') {
+    return `<div class="preview-grid">${bullets.map((text, index) => `
+      <div class="preview-grid-item"><b>0${index + 1}</b><span>${esc(text)}</span></div>`).join('')}</div>`;
+  }
+  if (layout === 'algorithm') {
+    const metricPattern = /^(时间复杂度|空间复杂度|稳定性|适用场景|特点)[：:]/;
+    const steps = (slide.steps || bullets.filter((text) => !metricPattern.test(text))).slice(0, 4);
+    const structuredMetrics = Array.isArray(slide.metrics)
+      ? slide.metrics.map((entry) => typeof entry === 'string'
+        ? entry
+        : `${entry.label || entry.name || '指标'}：${entry.value || entry.text || ''}`)
+      : slide.metrics && typeof slide.metrics === 'object'
+        ? Object.entries(slide.metrics).map(([label, value]) => `${label}：${value}`)
+        : [];
+    const metrics = (structuredMetrics.length
+      ? structuredMetrics
+      : bullets.filter((text) => metricPattern.test(text))).slice(0, 4);
+    if (!metrics.length) {
+      return `<ol class="preview-steps preview-steps-wide">${steps.map((text) => `<li>${esc(text)}</li>`).join('')}</ol>`;
+    }
+    return `<div class="preview-split">
+      <ol class="preview-steps">${steps.map((text) => `<li>${esc(text)}</li>`).join('')}</ol>
+      <div class="preview-metrics">${metrics.map((text) => `<span>${esc(text)}</span>`).join('')}</div>
+    </div>`;
+  }
+  if (layout === 'comparison') {
+    const rows = Array.isArray(slide.comparisonRows) && slide.comparisonRows.length
+      ? slide.comparisonRows.slice(0, 5).map((row, index) => Array.isArray(row)
+        ? row : [row.label || row.name || `维度 ${index + 1}`, row.value || row.text || ''])
+      : bullets.map((text, index) => splitPreviewLabel(text, `要点 ${index + 1}`));
+    return `<table class="preview-table"><thead><tr><th>比较维度</th><th>教学结论</th></tr></thead><tbody>${rows
+      .map((row) => `<tr><td>${esc(row[0])}</td><td>${esc(row[1])}</td></tr>`).join('')}</tbody></table>`;
+  }
+  if (layout === 'case') {
+    return `<div class="preview-timeline">${bullets.map((text, index) => {
+      const [label, value] = splitPreviewLabel(text, `环节 ${index + 1}`);
+      return `<div><b>${index + 1}</b><strong>${esc(label)}</strong><span>${esc(value)}</span></div>`;
+    }).join('')}</div>`;
+  }
+  if (layout === 'interaction') {
+    return `<div class="preview-question">${esc(bullets[0] || '课堂主问题')}</div>
+      <div class="preview-prompts">${bullets.slice(1).map((text) => `<span>${esc(text)}</span>`).join('')}</div>`;
+  }
+  if (layout === 'summary') {
+    return `<div class="preview-map"><strong>核心要点</strong>${bullets.map((text) => `<span>${esc(text)}</span>`).join('')}</div>`;
+  }
+  const left = bullets.slice(0, 2);
+  const generatedExamples = [
+    slide.example ? `示例：${slide.example}` : '',
+    slide.counterExample ? `反例：${slide.counterExample}` : '',
+  ].filter(Boolean);
+  const right = generatedExamples.length ? generatedExamples : bullets.slice(2);
+  return `<div class="preview-definition"><div><b>核心内容</b>${left.map((text) => `<p>${esc(text)}</p>`).join('')}</div>
+    <div><b>${generatedExamples.length ? 'AI 示例与反例' : '关键理解与辨析'}</b>${right.map((text) => `<p>${esc(text)}</p>`).join('')}</div></div>`;
+}
+
 // 渲染“PPT 生成”预览面板（只读预览）。
 function renderPptPreview() {
   const host = $('#ppt-preview');
@@ -228,19 +338,21 @@ function renderPptPreview() {
     return;
   }
   host.innerHTML = state.slides
-    .map(
-      (slide) => `
-      <div class="slide">
+    .map((slide) => {
+      const layout = selectSlideLayout(slide);
+      return `
+      <div class="slide preview-layout-${layout}">
         <div class="slide-head">
           <span class="section-badge">${esc(slide.section)}</span>
           <span class="title">${esc(slide.title)}</span>
+          <span class="layout-badge">${esc(PREVIEW_LAYOUT_LABELS[layout] || '结构化内容')}</span>
         </div>
         <div class="slide-body">
-          <ul>${slide.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>
-          ${slide.notes.length ? `<div class="slide-notes">${slide.notes.map(esc).join('<br/>')}</div>` : ''}
+          ${renderPreviewBody(slide, layout)}
+          ${slide.notes?.length ? `<div class="slide-notes">${slide.notes.map(esc).join('<br/>')}</div>` : ''}
         </div>
-      </div>`,
-    )
+      </div>`;
+    })
     .join('');
 }
 
@@ -248,13 +360,16 @@ function renderPptPreview() {
 function renderReview() {
   const host = $('#review-list');
   const summary = $('#review-summary');
+  const confirmAllButton = $('#btn-confirm-all');
   if (!state.slides.length) {
     host.innerHTML = '<div class="empty">尚未生成 PPT，请先完成生成步骤。</div>';
     summary.innerHTML = '';
+    confirmAllButton.disabled = true;
     return;
   }
 
   const stats = summarizeReview(state.slides);
+  confirmAllButton.disabled = stats.pending === 0;
   summary.innerHTML = `
     <div class="summary-item"><div class="num">${stats.total}</div><div class="label">总数</div></div>
     <div class="summary-item"><div class="num">${stats.confirmed}</div><div class="label">已确认</div></div>
@@ -280,6 +395,13 @@ function renderReview() {
           <div class="slide-body">
             <input class="slide-edit-title" value="${esc(slide.title)}" data-role="title" />
             <textarea class="slide-edit-bullets" data-role="bullets">${esc(slide.bullets.join('\n'))}</textarea>
+            ${slide.example || slide.counterExample ? `
+              <label class="review-extra-field">AI 示例
+                <textarea class="slide-edit-extra" data-role="example">${esc(slide.example || '')}</textarea>
+              </label>
+              <label class="review-extra-field">AI 反例
+                <textarea class="slide-edit-extra" data-role="counterExample">${esc(slide.counterExample || '')}</textarea>
+              </label>` : ''}
             ${
               slide.notes.length
                 ? `<div class="slide-notes">${slide.notes.map(esc).join('<br/>')}</div>`
@@ -309,6 +431,12 @@ function renderReview() {
       state.slides = updateSlide(state.slides, id, {
         bullets: event.target.value.split('\n').map((line) => line.trim()).filter(Boolean),
       });
+    });
+  });
+  host.querySelectorAll('[data-role="example"], [data-role="counterExample"]').forEach((textarea) => {
+    textarea.addEventListener('input', (event) => {
+      const id = event.target.closest('.slide').dataset.slide;
+      state.slides = updateSlide(state.slides, id, { [event.target.dataset.role]: event.target.value.trim() });
     });
   });
 
@@ -384,7 +512,7 @@ function showAiStatus(text) {
   host.textContent = text || '';
 }
 
-// 调用后端接口，用大模型重新生成 PPT 大纲。
+// 调用后端接口，用大模型生成 PPT 大纲。
 async function generateWithAI() {
   if (!state.analysis) {
     alert('请先完成内容理解。');
@@ -438,6 +566,8 @@ function bindEvents() {
     );
     state.uploads = [];
     state.analysis = null;
+    state.analysisSource = null;
+    state.analysisWarning = '';
     state.slides = [];
     renderFileChips();
     showFileStatus('');
@@ -464,6 +594,8 @@ function bindEvents() {
     event.target.value = '';
     if (imported) {
       state.analysis = null;
+      state.analysisSource = null;
+      state.analysisWarning = '';
       state.supplements = [];
       state.slides = [];
     }
@@ -472,16 +604,27 @@ function bindEvents() {
     showFileStatus([summary, ...failures].filter(Boolean).join(' '), failures.length > 0);
   });
 
-  $('#btn-analyze').addEventListener('click', () => {
+  $('#btn-analyze').addEventListener('click', async () => {
     if (!collectMaterials().length) {
       alert('请先上传或粘贴至少一份教学资料。');
       return;
     }
+    const button = $('#btn-analyze');
+    const originalText = button.textContent;
     state.analysis = null;
+    state.analysisSource = null;
+    state.analysisWarning = '';
     state.slides = [];
-    ensureAnalysis();
     goTo(2);
-    render();
+    $('#analysis-result').innerHTML = '<div class="empty">AI 正在理解教学资料，请稍候…</div>';
+    button.disabled = true;
+    try {
+      await ensureAnalysis();
+      render();
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
   });
 
   $('#btn-to-supplement').addEventListener('click', () => navigateTo(3));
@@ -492,6 +635,11 @@ function bindEvents() {
     render();
   });
   $('#btn-to-review').addEventListener('click', () => navigateTo(5));
+
+  $('#btn-confirm-all').addEventListener('click', () => {
+    state.slides = confirmAllSlides(state.slides);
+    renderReview();
+  });
 
   $('#btn-ai-generate').addEventListener('click', generateWithAI);
 
@@ -524,6 +672,8 @@ function fillSample() {
   $('#mat-past-ppt').value = SAMPLE_MATERIALS.pastPpt;
   // 资料已变化，作废旧有解析结果，避免展示过期的“内容理解/PPT”。
   state.analysis = null;
+  state.analysisSource = null;
+  state.analysisWarning = '';
   state.supplements = [];
   state.slides = [];
 }

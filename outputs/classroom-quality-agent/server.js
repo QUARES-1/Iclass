@@ -5,7 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateOutlineWithLLM } from './src/llm.js';
+import { analyzeMaterialsWithLLM, generateOutlineWithLLM } from './src/llm.js';
 import { extractUploadedFile, FileParseError, MAX_UPLOAD_BYTES } from './src/fileParser.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,6 +136,20 @@ function isValidSupplements(supplements) {
     && supplements.every((item) => item && typeof item === 'object');
 }
 
+function isValidMaterials(materials) {
+  if (!Array.isArray(materials) || materials.length === 0 || materials.length > 20) return false;
+  let totalLength = 0;
+  for (const item of materials) {
+    if (!item || typeof item !== 'object') return false;
+    if (typeof item.type !== 'string' || item.type.length > 100) return false;
+    if (typeof item.title !== 'string' || item.title.length > 255) return false;
+    if (typeof item.content !== 'string' || !item.content.trim() || item.content.length > 250000) return false;
+    totalLength += item.content.length;
+    if (totalLength > 500000) return false;
+  }
+  return true;
+}
+
 function isRateLimited(req, scope, maxRequests) {
   const now = Date.now();
   const client = `${scope}:${req.socket.remoteAddress || 'unknown'}`;
@@ -178,6 +192,36 @@ async function handleGenerateOutline(req, res) {
     console.error('生成 PPT 大纲失败：', error);
     res.writeHead(500, jsonHeaders);
     res.end(JSON.stringify({ error: 'PPT 大纲生成失败，请稍后重试。' }));
+  }
+}
+
+// 处理 POST /api/analyze-materials：让大模型从原始资料中提取结构化教学内容。
+async function handleAnalyzeMaterials(req, res) {
+  const jsonHeaders = { 'Content-Type': 'application/json; charset=utf-8' };
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    res.writeHead(400, jsonHeaders);
+    res.end(JSON.stringify({ error: '请求体不是有效的 JSON。' }));
+    return;
+  }
+
+  const materials = body && body.materials;
+  if (!isValidMaterials(materials)) {
+    res.writeHead(400, jsonHeaders);
+    res.end(JSON.stringify({ error: '教学资料参数格式不正确或内容过长。' }));
+    return;
+  }
+
+  try {
+    const result = await analyzeMaterialsWithLLM(materials);
+    res.writeHead(200, jsonHeaders);
+    res.end(JSON.stringify(result));
+  } catch (error) {
+    console.error('AI 内容理解失败：', error);
+    res.writeHead(500, jsonHeaders);
+    res.end(JSON.stringify({ error: '内容理解失败，请稍后重试。' }));
   }
 }
 
@@ -229,6 +273,20 @@ const server = http.createServer((req, res) => {
   }
 
   // 新增：AI 生成 PPT 大纲接口（接大模型 API，人机协同编码）。
+  if (req.method === 'POST' && requestUrl.pathname === '/api/analyze-materials') {
+    if (isRateLimited(req, 'llm', LLM_RATE_LIMIT_MAX)) {
+      res.writeHead(429, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Retry-After': '60',
+      });
+      res.end(JSON.stringify({ error: 'AI 内容理解请求过于频繁，请稍后重试。' }));
+      return;
+    }
+    handleAnalyzeMaterials(req, res);
+    return;
+  }
+
+  // AI 生成 PPT 大纲接口（与内容理解共用每分钟调用上限）。
   if (req.method === 'POST' && requestUrl.pathname === '/api/generate-outline') {
     if (isRateLimited(req, 'llm', LLM_RATE_LIMIT_MAX)) {
       res.writeHead(429, {
