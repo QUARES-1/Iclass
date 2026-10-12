@@ -843,3 +843,9 @@ input:focus {
 
 .tl-break .tl-badge { background: #e5e7eb; color: #4b5563; }
 .tl-break { border-color: #e5e7eb; }
+
+/* —— Sprint 2：关键词与提问时间轴（新增）—— */
+.tag.is-keyword { background: #fef3c7; color: #92400e; }
+.tag.is-keyword em { font-style: normal; opacity: 0.7; margin-left: 2px; }
+.tl-question .tl-badge { background: #dcfce7; color: #166534; }
+.tl-question { border-color: #bbf7d0; }

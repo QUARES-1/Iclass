@@ -134,3 +134,45 @@ docs: 编写 README 运行指南
 | 赵易 | 20246166 | 质量与风险负责人（本轮 DRI） |
 | 衣婉宁 | 20245977 | 数据与架构负责人 |
 | 王耀辉 | 20246130 | AI 工具整合负责人 |
+
+---
+
+## 九、Sprint 2 课中课堂感知
+
+### 工作流
+
+课堂设置 → 音视频采集 → 语音转写 → 文本分析（语速 / 语调 / 关键词 / 提问互动）→ 课堂报告。
+
+> 说明：本切片不再统计「抬头率」（需视频人脸识别，成本过高），改为基于「语音转写 → 文本分析」的课堂感知。
+
+### Whisper 语音转写（可选，真实 ASR）
+
+上传录音 / 视频后，后端会调用本地 Whisper 转写为带时间戳的文字稿。脚本优先使用 `faster-whisper`（轻量、支持 Python 3.13、速度快），未安装时回退 `openai-whisper`。
+
+安装步骤（需自行安装）：
+
+```bash
+# 1) 安装 faster-whisper（推荐，不用 PyTorch，体积小）
+pip install -r requirements.txt
+# 或手动：pip install faster-whisper -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 2) 安装 ffmpeg（Whisper 依赖它做音频解码）
+winget install --id Gyan.FFmpeg --source winget
+# 或到 https://ffmpeg.org/download.html 下载后加入 PATH
+```
+
+国内网络首次运行会从 HuggingFace 下载模型，建议先设置镜像：
+
+```powershell
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+```
+
+安装完成后重启 `npm start`。模型默认 `small`，可在 `.env` 中用 `WHISPER_MODEL=tiny|base|small|medium` 调整。
+
+未安装 Whisper / ffmpeg 时，页面会自动回退到「示意转写」，不影响流程体验。
+
+### Sprint 2 关键文件
+
+- `src/classroom.js`：语速、语调、关键词、提问互动分析与时间轴、报告生成。
+- `public/sprint2.html` / `public/sprint2.js`：课堂感知页面与交互。
+- `transcribe.py`：Whisper 转写脚本（由 `server.js` 的 `/api/transcribe` 调用）。

@@ -3,3 +3,6 @@ node_modules/
 output/
 .env.*
 !.env.example
+
+# Whisper 模型文件（体积大，不提交）
+models/

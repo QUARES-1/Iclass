@@ -1,0 +1,6 @@
+# Sprint 2 语音转写依赖（推荐 faster-whisper：轻量、支持 Python 3.13、速度快、不用 PyTorch）
+faster-whisper
+# 锁定 PyAV：av>=14 移除了 faster-whisper 1.2.1 需要的 metadata_errors 参数，必须用 13.x
+av<14
+# 备选：openai-whisper（依赖 PyTorch/numba，体积大，Python 3.13 上可能装不上）
+# openai-whisper

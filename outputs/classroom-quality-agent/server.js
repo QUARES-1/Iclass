@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeMaterialsWithLLM, generateOutlineWithLLM } from './src/llm.js';
 import { extractUploadedFile, FileParseError, MAX_UPLOAD_BYTES } from './src/fileParser.js';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -26,6 +28,7 @@ const HOST = process.env.HOST || '127.0.0.1';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const LLM_RATE_LIMIT_MAX = Math.max(1, Number(process.env.LLM_RATE_LIMIT) || 10);
 const FILE_PARSE_RATE_LIMIT_MAX = Math.max(1, Number(process.env.FILE_PARSE_RATE_LIMIT) || 30);
+const TRANSCRIBE_RATE_LIMIT_MAX = Math.max(1, Number(process.env.TRANSCRIBE_RATE_LIMIT) || 10);
 const requestBuckets = new Map();
 
 // 常用文件类型到 Content-Type 的映射，避免浏览器把 JS/CSS 当作文本误读。
@@ -255,6 +258,71 @@ async function handleExtractFile(req, res, requestUrl) {
   }
 }
 
+// 调用本地 Whisper（Python）把音频/视频转写为带时间戳文本。
+async function transcribeWithWhisper(buffer, fileName) {
+  const ext = path.extname(fileName) || '.mp3';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classroom-'));
+  const tmpFile = path.join(tmpDir, 'input' + ext);
+  const script = path.join(ROOT, 'transcribe.py');
+  const python = process.env.PYTHON || 'python';
+  const model = process.env.WHISPER_MODEL || 'small';
+  fs.writeFileSync(tmpFile, buffer);
+  try {
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(python, [script, tmpFile, '--model', model, '--language', 'zh'], {
+        cwd: ROOT,
+        windowsHide: true,
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      child.stderr.on('data', (d) => { stderr += d; });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve(stdout.trim());
+        else reject(new Error(stderr.trim() || 'Whisper 转写进程退出码 ' + code));
+      });
+    });
+    if (!output) throw new Error('Whisper 未返回结果。');
+    return JSON.parse(output);
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* 忽略清理失败 */ }
+  }
+}
+
+// 处理 POST /api/transcribe。
+async function handleTranscribe(req, res, requestUrl) {
+  const jsonHeaders = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  const fileName = requestUrl.searchParams.get('name') || 'audio.mp3';
+  if (!fileName || fileName.length > 255) {
+    res.writeHead(400, jsonHeaders);
+    res.end(JSON.stringify({ error: '请提供有效的文件名。' }));
+    return;
+  }
+  try {
+    const buffer = await readBinaryBody(req);
+    const result = await transcribeWithWhisper(buffer, fileName);
+    if (result && result.error === 'whisper-not-installed') {
+      res.writeHead(200, jsonHeaders);
+      res.end(JSON.stringify(result));
+      return;
+    }
+    res.writeHead(200, jsonHeaders);
+    res.end(JSON.stringify(result));
+  } catch (error) {
+    if (error instanceof FileParseError) {
+      res.writeHead(error.statusCode, jsonHeaders);
+      res.end(JSON.stringify({ error: error.message, code: error.code }));
+      return;
+    }
+    console.error('Whisper 转写失败：', error);
+    res.writeHead(500, jsonHeaders);
+    res.end(JSON.stringify({ error: '语音转写失败，请确认已安装 whisper 与 ffmpeg。', detail: String(error && error.message || error) }));
+  }
+}
 export const server = http.createServer((req, res) => {
   const url = req.url || '/';
   const requestUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
@@ -269,6 +337,20 @@ export const server = http.createServer((req, res) => {
       return;
     }
     handleExtractFile(req, res, requestUrl);
+    return;
+  }
+
+  // Whisper 语音转写接口：上传音频/视频，返回带时间戳文本。
+  if (req.method === 'POST' && requestUrl.pathname === '/api/transcribe') {
+    if (isRateLimited(req, 'transcribe', TRANSCRIBE_RATE_LIMIT_MAX)) {
+      res.writeHead(429, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Retry-After': '60',
+      });
+      res.end(JSON.stringify({ error: '语音转写请求过于频繁，请稍后重试。' }));
+      return;
+    }
+    handleTranscribe(req, res, requestUrl);
     return;
   }
 

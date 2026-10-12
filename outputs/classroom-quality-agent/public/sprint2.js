@@ -1,15 +1,15 @@
 // 前端交互入口：Sprint 2 课中课堂感知。
-// 复用 src/classroom.js 的纯函数，串联“课堂设置 → 数据采集 → 感知分析 → 时间轴”。
-// 支持上传课堂视频/录音（原型演示生成示意转写与抬头率），也可粘贴带时间戳的转写文本。
+// 工作流：课堂设置 → 数据采集（上传/录音）→ 语音转写（Whisper/人工）→ 文本分析 → 课堂报告。
+// 上传音频/视频后调用后端 /api/transcribe（Whisper），未安装 Whisper 时回退到示意转写。
 
 import {
   buildSchedule,
   scheduleTotalMinutes,
-  generateSampleHeadUpRateForSchedule,
-  analyzeHeadUpRate,
   parseTranscript,
   analyzeSpeechRate,
   analyzeTone,
+  analyzeKeywords,
+  analyzeInteraction,
   buildTimeline,
   buildClassroomRecord,
   formatTime,
@@ -42,11 +42,8 @@ const state = {
   schedule: buildSchedule(45, 10, 45),
   durationMin: 100,
   startTime: '08:00',
-  intervalSec: 30,
-  headUpRateSamples: [],
   speechSegments: [],
   media: null,
-  mediaDurationSec: 0,
   recognition: null,
   recording: false,
 };
@@ -72,14 +69,7 @@ function readMeta() {
   );
   state.durationMin = scheduleTotalMinutes(state.schedule);
   state.startTime = $('#inp-start').value || '08:00';
-  state.intervalSec = Math.max(10, Number($('#inp-interval').value) || 30);
-  return {
-    course: state.course,
-    schedule: state.schedule,
-    durationMin: state.durationMin,
-    startTime: state.startTime,
-    intervalSec: state.intervalSec,
-  };
+  return { course: state.course, schedule: state.schedule, durationMin: state.durationMin, startTime: state.startTime };
 }
 
 function goTo(step) {
@@ -89,20 +79,17 @@ function goTo(step) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// 载入示例：生成模拟抬头率 + 填充示例转写。
+// 载入示例：填充示例转写。
 function loadSample() {
-  const meta = readMeta();
+  readMeta();
   $('#transcript-input').value = SAMPLE_TRANSCRIPT;
-  state.headUpRateSamples = generateSampleHeadUpRateForSchedule(meta.schedule, meta.intervalSec);
   state.speechSegments = parseTranscript(SAMPLE_TRANSCRIPT);
 }
 
 function clearAll() {
   $('#transcript-input').value = '';
-  state.headUpRateSamples = [];
   state.speechSegments = [];
   state.media = null;
-  state.mediaDurationSec = 0;
   $('#record-status').textContent = '';
   $('#upload-status').textContent = '';
   $('#media-preview').innerHTML = '';
@@ -111,22 +98,23 @@ function clearAll() {
 
 // 确保有可分析的数据（没有则用示例兜底）。
 function ensureData() {
-  const meta = readMeta();
-  if (!state.headUpRateSamples.length) {
-    state.headUpRateSamples = generateSampleHeadUpRateForSchedule(meta.schedule, meta.intervalSec);
+  readMeta();
+  if (!state.speechSegments.length) {
+    $('#transcript-input').value = SAMPLE_TRANSCRIPT;
+    state.speechSegments = parseTranscript(SAMPLE_TRANSCRIPT);
   }
-  state.speechSegments = parseTranscript($('#transcript-input').value);
 }
 
-// 计算分析结果。
+// 计算分析结果（语速 / 语调 / 关键词 / 提问互动）。
 function computeAnalysis() {
-  const headUpRate = analyzeHeadUpRate(state.headUpRateSamples, 0.6);
   const speech = analyzeSpeechRate(state.speechSegments, state.durationMin);
   const tone = analyzeTone(state.speechSegments);
-  return { headUpRate, speech, tone };
+  const keywords = analyzeKeywords(state.speechSegments, 15);
+  const interaction = analyzeInteraction(state.speechSegments);
+  return { speech, tone, keywords, interaction };
 }
 
-// —— 上传课堂视频 / 录音 ——
+// —— 上传课堂录音 / 视频 ——
 function setupUpload() {
   const zone = $('#upload-zone');
   const input = $('#media-file');
@@ -147,6 +135,19 @@ function setupUpload() {
   });
 }
 
+// 后端 Whisper 转写接口。
+async function transcribeFile(file) {
+  const resp = await fetch('/api/transcribe?name=' + encodeURIComponent(file.name), {
+    method: 'POST',
+    body: file,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data.detail || data.error || '转写失败');
+  }
+  return data;
+}
+
 function handleMediaFile(file) {
   const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
   const isAudio = file.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|aac|flac)$/i.test(file.name);
@@ -160,22 +161,33 @@ function handleMediaFile(file) {
   $('#media-preview').innerHTML = isVideo
     ? `<video controls class="media-player" src="${url}"></video>`
     : `<audio controls class="media-player" src="${url}"></audio>`;
+  $('#upload-status').textContent = '正在用 Whisper 转写，请稍候…';
 
-  const el = $('#media-preview').querySelector('video, audio');
-  el.addEventListener('loadedmetadata', () => {
-    state.mediaDurationSec = Math.round(Number(el.duration) || 0);
-    buildFromMedia(kind);
-    $('#upload-status').textContent = `已载入${kind}「${esc(file.name)}」，时长约 ${formatTime(state.mediaDurationSec)}。已生成示意转写与抬头率（原型演示，可编辑下方文本替换为真实转写）。`;
-  });
-  el.addEventListener('error', () => {
-    $('#upload-status').textContent = '无法读取该文件时长（格式可能不受浏览器支持），请改用粘贴转写文本。';
-  });
+  transcribeFile(file)
+    .then((result) => {
+      if (result && Array.isArray(result.segments) && result.segments.length) {
+        const lines = result.segments
+          .filter((s) => s.text && s.text.trim())
+          .map((s) => `[${formatTime(s.start)}-${formatTime(s.end)}] ${s.text.trim()}`);
+        $('#transcript-input').value = lines.join('\n');
+        state.speechSegments = parseTranscript($('#transcript-input').value);
+        $('#upload-status').textContent = `Whisper 转写完成，共 ${result.segments.length} 段。可编辑下方文本后继续。`;
+      } else if (result && result.error === 'whisper-not-installed') {
+        buildFromMedia();
+        $('#upload-status').textContent = '未安装 Whisper，已回退到示意转写：' + (result.message || '');
+      } else {
+        buildFromMedia();
+        $('#upload-status').textContent = '未获取到转写结果，已回退到示意转写（可手动粘贴真实转写）。';
+      }
+    })
+    .catch((err) => {
+      buildFromMedia();
+      $('#upload-status').textContent = '转写失败，已回退到示意转写：' + (err && err.message ? err.message : '网络错误');
+    });
 }
 
-// 上传媒体后：生成示意转写 + 抬头率（真实“视频→音频→转写”需接入 ASR 服务）。
-function buildFromMedia(kind) {
-  const meta = readMeta();
-  state.headUpRateSamples = generateSampleHeadUpRateForSchedule(meta.schedule, meta.intervalSec);
+// 回退：填示例转写。
+function buildFromMedia() {
   $('#transcript-input').value = SAMPLE_TRANSCRIPT;
   state.speechSegments = parseTranscript(SAMPLE_TRANSCRIPT);
 }
@@ -230,6 +242,7 @@ function startRecording() {
     if (utterances.length) {
       const lines = utterances.map((u) => `[${formatTime(u.start)}-${formatTime(u.end)}] ${u.text}`);
       $('#transcript-input').value = lines.join('\n');
+      state.speechSegments = parseTranscript($('#transcript-input').value);
       $('#record-status').textContent = '识别结束，共 ' + utterances.length + ' 段。';
     }
   };
@@ -261,150 +274,56 @@ function stopRecordingUI() {
   $('#btn-stop-record').disabled = true;
 }
 
-// —— 步骤3：课堂感知分析 ——
+// —— 步骤3：课堂文本分析 ——
 function renderAnalysis() {
   const host = $('#analysis-result2');
-  const { headUpRate, speech, tone } = computeAnalysis();
+  const { speech, tone, keywords, interaction } = computeAnalysis();
 
-  const lowHtml = headUpRate.lowSegments.length
-    ? headUpRate.lowSegments
-        .map((s) => `<span class="tag is-difficult">${formatTime(s.start)} ~ ${formatTime(s.end)}</span>`)
-        .join('')
-    : '<span class="muted">未发现明显回落</span>';
-
-  const breakHtml = headUpRate.breakSegments.length
-    ? headUpRate.breakSegments
-        .map((s) => `<span class="tag is-break">${formatTime(s.start)} ~ ${formatTime(s.end)}</span>`)
-        .join('')
-    : '<span class="muted">无课间休息</span>';
+  const keywordHtml = keywords.length
+    ? keywords.map((k) => `<span class="tag is-keyword">${esc(k.word)} <em>${k.count}次</em></span>`).join('')
+    : '<span class="muted">暂无关键词</span>';
 
   host.innerHTML = `
     <div class="cards stat-cards">
-      <div class="card"><h3>平均抬头率（上课）</h3><div class="stat-num">${Math.round(headUpRate.average * 100)}%</div></div>
-      <div class="card"><h3>最低抬头率</h3><div class="stat-num">${Math.round(headUpRate.min * 100)}%</div></div>
       <div class="card"><h3>语速估算</h3><div class="stat-num">${speech.charsPerMin}</div><div class="stat-label">字/分钟（${speech.level}）</div></div>
-      <div class="card"><h3>提问次数</h3><div class="stat-num">${tone.questions}</div></div>
-    </div>
-
-    <div class="chart-box">
-      <h3>抬头率整体趋势（总时长 ${state.durationMin} 分钟，含课间休息）</h3>
-      <canvas id="headup-chart" width="720" height="260"></canvas>
-      <div class="chart-legend">
-        <span class="legend-item"><i class="legend-dot dot-low"></i>注意力回落</span>
-        <span class="legend-item"><i class="legend-dot dot-break"></i>课间休息</span>
-        <span class="legend-item"><i class="legend-dot dot-curve"></i>抬头率曲线</span>
-      </div>
+      <div class="card"><h3>转写字数</h3><div class="stat-num">${speech.chars}</div><div class="stat-label">共 ${speech.segmentCount} 段</div></div>
+      <div class="card"><h3>提问次数</h3><div class="stat-num">${interaction.questions}</div></div>
+      <div class="card"><h3>互动词频</h3><div class="stat-num">${interaction.interactionCount}</div></div>
     </div>
 
     <div class="cards">
       <div class="card">
-        <h3>⚠️ 注意力回落时间段</h3>
-        <div class="tag-list">${lowHtml}</div>
-        <p class="muted">低于阈值说明该时段学生注意力可能下降，建议结合转写与互动情况综合判断。</p>
-      </div>
-      <div class="card">
-        <h3>⏸️ 课间休息</h3>
-        <div class="tag-list">${breakHtml}</div>
-        <p class="muted">课间休息阶段学生离座放松，抬头率统计暂停，不计入平均抬头率。</p>
-      </div>
-      <div class="card">
         <h3>🎤 语速与语调</h3>
         <ul class="plain-list">
-          <li>转写文本：共 ${speech.chars} 字，${speech.segmentCount} 段</li>
+          <li>语速：约 ${speech.charsPerMin} 字/分钟（${speech.level}）</li>
           <li>平均句长：约 ${tone.avgSentenceLen} 字</li>
           <li>停顿/口头语：约 ${tone.pauses} 次</li>
         </ul>
-        <p class="muted">说明：语速为基于转写文本的估算；抬头率只统计整体趋势、不做人脸识别。</p>
+        <p class="muted">语速为基于转写文本的估算，供教师调整讲解节奏参考。</p>
+      </div>
+      <div class="card">
+        <h3>🔑 关键词提取</h3>
+        <div class="tag-list">${keywordHtml}</div>
+        <p class="muted">基于转写文本的高频词统计，帮助定位本课重点内容。</p>
+      </div>
+      <div class="card">
+        <h3>💬 提问与互动</h3>
+        <ul class="plain-list">
+          <li>提问次数：${interaction.questions}</li>
+          <li>互动相关词出现：约 ${interaction.interactionCount} 次</li>
+          <li>提问片段：${interaction.questionSegments.length} 段</li>
+        </ul>
+        <p class="muted">互动越多通常说明课堂越活跃，供复盘参考。</p>
       </div>
     </div>
   `;
-
-  drawChart($('#headup-chart'), headUpRate, state.durationMin);
 }
 
-function drawChart(canvas, analysis, totalMin) {
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = canvas.clientWidth || 720;
-  const cssH = 260;
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
-  canvas.style.height = cssH + 'px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  const pad = { top: 18, right: 18, bottom: 28, left: 40 };
-  const w = cssW - pad.left - pad.right;
-  const h = cssH - pad.top - pad.bottom;
-  const totalSec = totalMin * 60;
-
-  ctx.clearRect(0, 0, cssW, cssH);
-
-  const x = (t) => pad.left + (t / totalSec) * w;
-  const y = (rate) => pad.top + (1 - rate) * h;
-
-  // 背景网格与 y 轴刻度
-  ctx.strokeStyle = '#eef2f6';
-  ctx.fillStyle = '#9ca3af';
-  ctx.font = '11px sans-serif';
-  ctx.lineWidth = 1;
-  for (let r = 0; r <= 1; r += 0.2) {
-    const yy = y(r);
-    ctx.beginPath();
-    ctx.moveTo(pad.left, yy);
-    ctx.lineTo(pad.left + w, yy);
-    ctx.stroke();
-    ctx.fillText(Math.round(r * 100) + '%', 6, yy + 4);
-  }
-
-  // 课间休息背景
-  ctx.fillStyle = 'rgba(107, 114, 128, 0.14)';
-  for (const seg of analysis.breakSegments || []) {
-    ctx.fillRect(x(seg.start), pad.top, x(seg.end) - x(seg.start), h);
-  }
-
-  // 低注意力区间背景
-  ctx.fillStyle = 'rgba(220, 38, 38, 0.08)';
-  for (const seg of analysis.lowSegments) {
-    ctx.fillRect(x(seg.start), pad.top, x(seg.end) - x(seg.start), h);
-  }
-
-  // x 轴刻度（每 10 分钟）
-  for (let m = 0; m <= totalMin; m += 10) {
-    const xx = x(m * 60);
-    ctx.beginPath();
-    ctx.moveTo(xx, pad.top);
-    ctx.lineTo(xx, pad.top + h);
-    ctx.stroke();
-    ctx.fillText(m + '分', xx - 8, pad.top + h + 16);
-  }
-
-  // 阈值线
-  ctx.strokeStyle = '#f59e0b';
-  ctx.setLineDash([6, 4]);
-  ctx.beginPath();
-  ctx.moveTo(pad.left, y(0.6));
-  ctx.lineTo(pad.left + w, y(0.6));
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // 抬头率曲线
-  ctx.strokeStyle = '#4f46e5';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  analysis.samples.forEach((s, i) => {
-    const xx = x(s.t);
-    const yy = y(s.rate);
-    if (i === 0) ctx.moveTo(xx, yy);
-    else ctx.lineTo(xx, yy);
-  });
-  ctx.stroke();
-}
-
-// —— 步骤4：课堂时间轴 ——
+// —— 步骤4：课堂报告 ——
 function renderTimeline() {
   const host = $('#timeline-result');
-  const { headUpRate, speech, tone } = computeAnalysis();
-  const events = buildTimeline(headUpRate, state.speechSegments);
+  const { speech, keywords } = computeAnalysis();
+  const events = buildTimeline(state.schedule, state.speechSegments);
 
   const items = events
     .map((e) => {
@@ -419,37 +338,39 @@ function renderTimeline() {
     })
     .join('');
 
-  const lowCount = headUpRate.lowSegments.length;
-  const breakCount = headUpRate.breakSegments.length;
+  const breakCount = events.filter((e) => e.type === 'break').length;
+  const questionCount = events.filter((e) => e.type === 'question').length;
+
   host.innerHTML = `
     <div class="tl-summary">
       <div class="summary-item"><div class="num">${events.length}</div><div class="label">时间轴事件</div></div>
-      <div class="summary-item"><div class="num">${lowCount}</div><div class="label">注意力回落段</div></div>
-      <div class="summary-item"><div class="num">${breakCount}</div><div class="label">课间休息</div></div>
       <div class="summary-item"><div class="num">${speech.segmentCount}</div><div class="label">转写片段</div></div>
-      <div class="summary-item"><div class="num">${tone.questions}</div><div class="label">提问</div></div>
+      <div class="summary-item"><div class="num">${questionCount}</div><div class="label">提问</div></div>
+      <div class="summary-item"><div class="num">${breakCount}</div><div class="label">课间休息</div></div>
+      <div class="summary-item"><div class="num">${keywords.length}</div><div class="label">关键词</div></div>
     </div>
     <div class="timeline-list">${items}</div>
-    <div class="warn-banner">💡 已生成带时间戳的课堂记录。抬头率仅作整体趋势参考，最终判断由教师/督导人工确认。</div>
+    <div class="warn-banner">💡 已生成带时间戳的课堂分析报告。语音转写由 Whisper/人工完成，分析结果为统计参考，最终判断由教师/督导确认。</div>
   `;
 }
 
-// 导出课堂记录。
+// 导出课堂报告。
 function exportRecord() {
-  const { headUpRate, speech, tone } = computeAnalysis();
-  const events = buildTimeline(headUpRate, state.speechSegments);
+  const { speech, tone, keywords, interaction } = computeAnalysis();
+  const events = buildTimeline(state.schedule, state.speechSegments);
   const md = buildClassroomRecord({
     meta: { course: state.course, durationMin: state.durationMin, startTime: state.startTime, schedule: state.schedule },
-    headUpRate,
     speech,
     tone,
+    keywords,
+    interaction,
     events,
   });
   const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = '课堂记录-Sprint2.md';
+  a.download = '课堂报告-Sprint2.md';
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -468,7 +389,6 @@ function bindEvents() {
     goTo(2);
   });
   $('#btn-to-analysis').addEventListener('click', () => {
-    readMeta();
     ensureData();
     goTo(3);
     renderAnalysis();

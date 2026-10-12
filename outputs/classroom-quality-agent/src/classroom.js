@@ -1,7 +1,8 @@
 // 课中课堂感知模块（Sprint 2）。
-// 把课堂过程的抬头率、语音转写、语速语调等数据组织与分析，
-// 最终生成带时间戳的课堂记录与“状态变化时间段”，供课后复盘使用。
-// 说明：抬头率只统计整体趋势、不做人脸识别；语音转写依赖浏览器 Web Speech API 或人工导入。
+// 工作流：课堂设置 → 音视频采集 → 语音转写 → 文本分析 → 课堂分析报告。
+// 文本分析维度：语速、语调、关键词、提问与互动。
+// 说明：不再统计抬头率（需视频人脸识别，成本过高）；语音转写优先用 Whisper（Python），
+// 未安装 Whisper 时回退到示意转写或人工粘贴。
 
 // 把秒数格式化为 mm:ss 或 h:mm:ss。
 export function formatTime(totalSec) {
@@ -39,91 +40,6 @@ export function scheduleTotalMinutes(schedule) {
   return segs.reduce((n, s) => n + (Number(s.minutes) || 0), 0);
 }
 
-// 生成模拟抬头率采样，支持课时结构（上课段 + 课间休息段）。
-export function generateSampleHeadUpRateForSchedule(schedule, intervalSec = 30) {
-  const segs = Array.isArray(schedule) && schedule.length
-    ? schedule
-    : [{ label: '课堂', type: 'class', minutes: 45 }];
-  const step = Number(intervalSec) || 30;
-  const samples = [];
-  let clock = 0;
-  for (const seg of segs) {
-    const total = Math.max(0, Number(seg.minutes) || 0) * 60;
-    const isBreak = seg.type === 'break';
-    for (let t = 0; t <= total; t += step) {
-      let rate;
-      if (isBreak) {
-        rate = 0.04 + Math.sin(t * 0.5) * 0.02;
-      } else {
-        const x = total > 0 ? t / total : 0;
-        const base = 0.86 - 0.34 * Math.sin(Math.PI * Math.min(x * 1.2, 1));
-        const interactionBoost = Math.exp(-Math.pow((x - 0.62) / 0.12, 2)) * 0.13;
-        const noise = (Math.sin(t * 0.7) + Math.sin(t * 0.23)) * 0.02;
-        rate = base + interactionBoost + noise;
-      }
-      rate = Math.min(0.98, Math.max(0.02, rate));
-      samples.push({ t: clock + t, rate: Math.round(rate * 1000) / 1000, phase: isBreak ? 'break' : 'class' });
-    }
-    clock += total;
-  }
-  return samples;
-}
-
-// 向后兼容：单节课（无课间休息）。
-export function generateSampleHeadUpRate(durationMin = 45, intervalSec = 30) {
-  return generateSampleHeadUpRateForSchedule([{ label: '课堂', type: 'class', minutes: durationMin }], intervalSec);
-}
-
-// 分析抬头率：只在“上课”阶段计算均值/最低值和注意力回落，课间休息单独标记。
-export function analyzeHeadUpRate(samples, threshold = 0.6) {
-  const list = (samples || []).slice().sort((a, b) => a.t - b.t);
-  if (!list.length) {
-    return { samples: list, classSamples: [], average: 0, min: 1, max: 0, lowSegments: [], breakSegments: [] };
-  }
-
-  const classSamples = list.filter((s) => s.phase !== 'break');
-
-  let sum = 0;
-  let min = 1;
-  let max = 0;
-  for (const s of classSamples) {
-    sum += s.rate;
-    if (s.rate < min) min = s.rate;
-    if (s.rate > max) max = s.rate;
-  }
-  const average = classSamples.length ? sum / classSamples.length : 0;
-
-  const lowSegments = [];
-  let lowStart = null;
-  let lowPrev = null;
-  for (const s of classSamples) {
-    const low = s.rate < threshold;
-    if (low && lowStart === null) lowStart = s.t;
-    if (!low && lowStart !== null && lowPrev !== null) {
-      lowSegments.push({ start: lowStart, end: lowPrev.t });
-      lowStart = null;
-    }
-    lowPrev = s;
-  }
-  if (lowStart !== null && lowPrev !== null) lowSegments.push({ start: lowStart, end: lowPrev.t });
-
-  const breakSegments = [];
-  let bStart = null;
-  let bPrev = null;
-  for (const s of list) {
-    const isBreak = s.phase === 'break';
-    if (isBreak && bStart === null) bStart = s.t;
-    if (!isBreak && bStart !== null && bPrev !== null) {
-      breakSegments.push({ start: bStart, end: bPrev.t });
-      bStart = null;
-    }
-    bPrev = s;
-  }
-  if (bStart !== null && bPrev !== null) breakSegments.push({ start: bStart, end: bPrev.t });
-
-  return { samples: list, classSamples, average, min, max, lowSegments, breakSegments };
-}
-
 // 解析带时间戳的转写文本。支持两种格式：
 //   [00:00-00:55] 文本
 //   00:00-00:55 文本
@@ -142,83 +58,116 @@ export function parseTranscript(text) {
   return segments;
 }
 
-// 分析语速：按转写文本字数与课堂时长估算“字/分钟”，并给出节奏评价。
+// 分析语速：按转写文本字数与“实际语音时长”估算“字/分钟”，并给出节奏评价。
+// 优先用带时间戳片段的起止时间计算实际时长；无时间戳时才退回课堂总时长。
 export function analyzeSpeechRate(segments, durationMin = 45) {
   const list = (segments || []).filter((s) => s.text);
   const chars = list.reduce((n, s) => n + s.text.replace(/\s/g, '').length, 0);
-  const minutes = Math.max(1, Number(durationMin) || 45);
+  const timed = list.filter(
+    (s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start && s.start >= 0
+  );
+  let minutes;
+  let actualSpeechSeconds = 0;
+  if (timed.length) {
+    // 实际说话时长 = 各片段时长之和（排除静音/停顿空档），
+    // 而不是“第一个片段起点到最后一个片段终点”的跨度（那会把静音也算进去，导致语速偏慢）。
+    actualSpeechSeconds = timed.reduce((n, s) => n + (s.end - s.start), 0);
+    minutes = Math.max(0.1, actualSpeechSeconds / 60);
+  } else {
+    minutes = Math.max(1, Number(durationMin) || 45);
+  }
   const charsPerMin = Math.round(chars / minutes);
   const level = charsPerMin > 300 ? '偏快' : charsPerMin < 180 ? '偏慢' : '适中';
   const segmentCount = list.length;
   const avgCharsPerSegment = segmentCount ? Math.round(chars / segmentCount) : 0;
-  return { chars, charsPerMin, level, segmentCount, avgCharsPerSegment };
+  return { chars, charsPerMin, level, segmentCount, avgCharsPerSegment, actualSpeechSeconds };
 }
 
-// 分析语调/节奏：基于问句数量、停顿词（嗯/啊/这个）做基础统计。
+// 分析语调/节奏：基于句子数量、停顿词（嗯/啊/这个）做基础统计。
 export function analyzeTone(segments) {
   const list = (segments || []).filter((s) => s.text);
   const joined = list.map((s) => s.text).join('');
-  const questions = (joined.match(/[？?]/g) || []).length;
-  const pauses = (joined.match(/[嗯啊呃这个那个]/g) || []).length;
+  const pauses = (joined.match(/[嗯啊呃这个那个就是那么]/g) || []).length;
   const sentences = joined.split(/[。！？!?；;]/).filter((s) => s.trim()).length;
   const avgSentenceLen = sentences ? Math.round(joined.length / sentences) : 0;
-  return { questions, pauses, sentences, avgSentenceLen };
+  return { pauses, sentences, avgSentenceLen };
 }
 
-// 找出抬头率的局部峰值（用于标记互动/投入回升点）。
-function findPeaks(samples, minProminence = 0.06) {
-  const peaks = [];
-  for (let i = 1; i < samples.length - 1; i++) {
-    const prev = samples[i - 1].rate;
-    const cur = samples[i].rate;
-    const next = samples[i + 1].rate;
-    if (cur > prev && cur >= next && cur - Math.min(prev, next) >= minProminence) {
-      peaks.push(samples[i]);
+// 中文停用词（用于关键词提取时过滤常见虚词/口语词）。
+const STOPWORDS = new Set([
+  '的','了','在','是','我','你','他','她','它','我们','你们','他们','大家','同学们',
+  '有','和','就','不','人','都','一','一个','上','下','也','很','到','说','要','去',
+  '会','着','看','好','这','那','这个','那个','什么','怎么','为什么','可以','还有',
+  '已经','比较','非常','一点','一些','一下','等等','进行','通过','然后','所以','因为',
+  '但是','如果','以及','比如','就是','这样','那样','这里','那里','现在','今天','老师',
+  '对于','关于','从','向','把','被','让','给','对','来','用','主要','重要','关键',
+]);
+
+// 关键词提取：对中文转写做 2~6 字 n-gram 词频统计，过滤停用词后取高频词。
+export function analyzeKeywords(segments, topN = 15) {
+  const text = (segments || []).filter((s) => s.text).map((s) => s.text).join('');
+  const cleaned = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+  const freq = new Map();
+  for (let len = 6; len >= 2; len--) {
+    for (let i = 0; i + len <= cleaned.length; i++) {
+      const gram = cleaned.slice(i, i + len);
+      if (STOPWORDS.has(gram)) continue;
+      if (!/[\u4e00-\u9fa5]/.test(gram)) continue;
+      freq.set(gram, (freq.get(gram) || 0) + 1);
     }
   }
-  return peaks.slice(0, 6);
+  const candidates = Array.from(freq.entries())
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
+  const result = [];
+  for (const [word, count] of candidates) {
+    if (result.length >= topN) break;
+    if (result.some((r) => r.word.includes(word))) continue;
+    result.push({ word, count });
+  }
+  return result;
 }
 
-// 生成课堂时间轴事件：合并课间休息、注意力回落、互动回升与转写片段。
-export function buildTimeline(analysis, speechSegments) {
+// 提问与互动分析：统计提问次数、互动相关词出现次数、以及提问片段。
+const INTERACTION_WORDS = ['提问', '回答', '讨论', '思考', '练习', '互动', '举例', '大家', '谁', '为什么', '请', '想一想', '说说看'];
+
+export function analyzeInteraction(segments) {
+  const list = (segments || []).filter((s) => s.text);
+  const joined = list.map((s) => s.text).join('');
+  const questionSegments = list.filter((s) => /[？?]/.test(s.text));
+  const questions = (joined.match(/[？?]/g) || []).length;
+  const interactionCount = (joined.match(new RegExp(INTERACTION_WORDS.join('|'), 'g')) || []).length;
+  return { questions, questionSegments, interactionCount };
+}
+
+// 生成课堂时间轴事件：合并课间休息、讲解片段与提问片段。
+export function buildTimeline(schedule, speechSegments) {
   const events = [];
-
-  for (const seg of analysis.breakSegments || []) {
-    events.push({
-      t: seg.start,
-      end: seg.end,
-      type: 'break',
-      label: '课间休息',
-      detail: `课间休息，学生离座放松，抬头率统计暂停（约 ${Math.round((seg.end - seg.start) / 60)} 分钟）`,
-    });
+  let clock = 0;
+  for (const seg of (Array.isArray(schedule) ? schedule : [])) {
+    const minutes = Number(seg.minutes) || 0;
+    if (seg.type === 'break' && minutes > 0) {
+      events.push({ t: clock, end: clock + minutes * 60, type: 'break', label: '课间休息', detail: `课间休息约 ${minutes} 分钟` });
+    }
+    clock += minutes * 60;
   }
-
-  for (const seg of analysis.lowSegments) {
-    events.push({
-      t: seg.start,
-      end: seg.end,
-      type: 'attention-low',
-      label: '注意力回落',
-      detail: `抬头率连续低于阈值，持续约 ${Math.round((seg.end - seg.start) / 60)} 分钟`,
-    });
-  }
-
-  for (const seg of speechSegments) {
+  for (const seg of (speechSegments || [])) {
     if (!seg.text) continue;
-    events.push({ t: seg.start, end: seg.end, type: 'speech', label: '语音', detail: seg.text });
+    const isQuestion = /[？?]/.test(seg.text);
+    events.push({
+      t: seg.start,
+      end: seg.end,
+      type: isQuestion ? 'question' : 'speech',
+      label: isQuestion ? '提问' : '讲解',
+      detail: seg.text,
+    });
   }
-
-  for (const p of findPeaks(analysis.samples || [])) {
-    if (p.phase === 'break') continue;
-    events.push({ t: p.t, type: 'interaction', label: '互动/投入回升', detail: `抬头率回升至 ${Math.round(p.rate * 100)}%` });
-  }
-
   return events.sort((a, b) => a.t - b.t);
 }
 
-// 生成带时间戳的课堂记录（Markdown）。
-export function buildClassroomRecord({ meta, headUpRate, speech, tone, events }) {
-  const lines = ['# 课堂记录（Sprint 2 课中课堂感知）', ''];
+// 生成课堂分析报告（Markdown）。
+export function buildClassroomRecord({ meta, speech, tone, keywords, interaction, events }) {
+  const lines = ['# 课堂分析报告（Sprint 2 课中课堂感知）', ''];
   if (meta) {
     lines.push(`- 课程：${meta.course || '未命名'}`);
     lines.push(`- 总时长：${meta.durationMin || 45} 分钟`);
@@ -228,41 +177,29 @@ export function buildClassroomRecord({ meta, headUpRate, speech, tone, events })
     lines.push(`- 开始时间：${meta.startTime || '—'}`);
     lines.push('');
   }
-  lines.push('## 抬头率统计');
-  lines.push(`- 上课阶段平均抬头率：${Math.round(headUpRate.average * 100)}%`);
-  lines.push(`- 最低抬头率：${Math.round(headUpRate.min * 100)}%`);
-  if (Array.isArray(headUpRate.breakSegments) && headUpRate.breakSegments.length) {
-    lines.push('- 课间休息：');
-    for (const seg of headUpRate.breakSegments) {
-      lines.push(`  - ${formatTime(seg.start)} ~ ${formatTime(seg.end)}`);
-    }
-  }
-  if (headUpRate.lowSegments.length) {
-    lines.push('- 注意力回落时间段：');
-    for (const seg of headUpRate.lowSegments) {
-      lines.push(`  - ${formatTime(seg.start)} ~ ${formatTime(seg.end)}`);
-    }
-  } else {
-    lines.push('- 未发现明显注意力回落时间段');
-  }
-  lines.push('');
-
-  lines.push('## 语速与语调');
+  lines.push('## 语速分析');
   lines.push(`- 语速：约 ${speech.charsPerMin} 字/分钟（${speech.level}）`);
-  lines.push(`- 转写片段：${speech.segmentCount} 段`);
-  if (tone) {
-    lines.push(`- 提问次数：${tone.questions}`);
-    lines.push(`- 停顿/口头语：约 ${tone.pauses} 次`);
-    lines.push(`- 平均句长：约 ${tone.avgSentenceLen} 字`);
+  lines.push(`- 转写总字数：${speech.chars} 字，共 ${speech.segmentCount} 段`);
+  lines.push('');
+  lines.push('## 语调分析');
+  lines.push(`- 平均句长：约 ${tone.avgSentenceLen} 字`);
+  lines.push(`- 停顿/口头语：约 ${tone.pauses} 次`);
+  lines.push('');
+  lines.push('## 提问与互动');
+  lines.push(`- 提问次数：${interaction.questions}`);
+  lines.push(`- 互动相关词出现：约 ${interaction.interactionCount} 次`);
+  lines.push('');
+  lines.push('## 关键词');
+  for (const k of keywords) {
+    lines.push(`- ${k.word}（${k.count} 次）`);
   }
   lines.push('');
-
   lines.push('## 带时间戳的课堂时间轴');
   for (const e of events) {
     const timeLabel = e.end ? `${formatTime(e.t)}~${formatTime(e.end)}` : formatTime(e.t);
     lines.push(`- **${timeLabel}** [${e.label}] ${e.detail}`);
   }
   lines.push('');
-  lines.push('> 说明：抬头率仅统计整体趋势，不做人脸识别；语音转写建议人工抽样校对。');
+  lines.push('> 说明：语音转写由 Whisper 或人工完成；语速、语调、关键词与互动均为基于转写文本的统计，供教师复盘参考。');
   return lines.join('\n');
 }
