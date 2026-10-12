@@ -47,7 +47,7 @@ test('问候直接回复，讨论可以修改总结并按要求补充单类分�
 });
 test('手机先看到整体总结，滚动后播放器仍可操作，兼容副本能播放ADPCM录音',async({page,request})=>{
   await fixture(request);await page.setViewportSize({width:390,height:844});await page.goto('/public/sprint2.html');expect((await page.locator('.audio-review').boundingBox()).y).toBeLessThan(200);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await page.locator('#audio-file').setInputFiles(path.resolve('artifacts/sprint2-audit/adpcm_ima_wav.wav'));await expect(page.locator('#upload-status')).toContainText('完整录音已保存');const state=await(await request.get('/api/classroom')).json();expect(state.audio.playbackFile).toMatch(/\.play\.mp3$/);
+  await page.locator('#audio-file').setInputFiles(path.resolve('artifacts/audio/adpcm_ima_wav.wav'));await expect(page.locator('#upload-status')).toContainText('完整录音已保存');const state=await(await request.get('/api/classroom')).json();expect(state.audio.playbackFile).toMatch(/\.play\.mp3$/);
   await page.locator('#play-full').click();await expect(page.locator('#audio-player')).toHaveJSProperty('paused',false);expect(await page.locator('#audio-player').evaluate(p=>p.error)).toBeNull();await page.evaluate(()=>window.scrollTo(0,document.body.scrollHeight));expect((await page.locator('#player-dock').boundingBox()).y).toBeLessThan(844);await page.screenshot({path:'artifacts/browser/audio-comfort-mobile.png'});
 });
 test('完整转写独立显示全部片段，搜索分页不截断全文，未保存校正进入导出并可切换原稿',async({page,request})=>{

@@ -20,6 +20,6 @@
 - 整理前完整备份：`data/backups/workspace-before-sample-dedup-78ab4bc9-3649-46b7-850b-13585b68f080.json`。
 - 在实际本机接口再请求八次：返回数据完全相同，文件字节未变。随后真实 Chrome 点击三次，条目数不变、当前步骤演示进度保留、浏览器无错误，数据文件没有写入。
 
-日志与结果：`artifacts/sample-dedup/unit-tests.txt`、`browser-tests.txt`、`live-results.json`、`live-browser-results.json`、`live-browser.png`。实际整理通过 [verify-sample-dedup-live.mjs](../scripts/verify-sample-dedup-live.mjs) 调用接口；浏览器复查见 [verify-sample-browser-live.mjs](../scripts/verify-sample-browser-live.mjs)。这些脚本不调用模型。源码指纹见 [environment.json](environment.json)。
+日志与结果：`artifacts/sample-dedup/unit-tests.txt`、`browser-tests.txt`、`live-results.json`、`live-browser-results.json`、`live-browser.png`。实际整理通过 [verify-sample-dedup-live.mjs](../../scripts/verify-sample-dedup-live.mjs) 调用接口；浏览器复查见 [verify-sample-browser-live.mjs](../../scripts/verify-sample-browser-live.mjs)。这些脚本不调用模型。源码指纹见 [environment.json](environment.json)。
 
 23 项需求的总体验证状态仍为 20 项已记录的本机流程/样例通过、3 项部分验证；本次修复不替代物理麦克风、长课堂人工听校或真实资源不足测试。前一轮文件与交互记录见 [upload-boundary-review.md](upload-boundary-review.md)。
