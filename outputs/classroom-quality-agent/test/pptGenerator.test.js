@@ -74,15 +74,11 @@ test('导出 Markdown 会过滤已删除的幻灯片', () => {
   assert.ok(markdown.includes('## 总结'));
 });
 
-test('正式 Markdown 只包含已确认内容', () => {
-  const slides = generateOutline(ANALYSIS, SUPPLEMENTS).map((slide, index) => ({
-    ...slide,
-    status: index === 0 ? 'confirmed' : index === 1 ? 'deleted' : 'pending',
-  }));
-  const markdown = toMarkdown(slides, { confirmedOnly: true });
-  assert.ok(markdown.includes('课程导入'));
-  assert.ok(!markdown.includes(slides[1].title));
-  assert.ok(!markdown.includes('课堂互动与讨论'));
+test('正式 Markdown 拒绝未全部确认的 PPT', () => {
+  const slides = generateOutline(ANALYSIS, SUPPLEMENTS);
+  assert.throws(() => toMarkdown(slides, {confirmedOnly:true}), /全部有效页面确认/);
+  const all = slides.map(s => ({...s,status:'confirmed'}));
+  assert.ok(toMarkdown(all, {confirmedOnly:true}).includes('课堂互动与讨论'));
 });
 
 test('生成页包含可供视觉导出的布局字段', () => {

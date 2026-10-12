@@ -1,5 +1,5 @@
-.env
-node_modules/
-output/
-.env.*
-!.env.example
+# App runtime data, model weights, exports and local verification artifacts
+/data/
+/output/
+/artifacts/
+/.tools/

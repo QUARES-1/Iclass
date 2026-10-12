@@ -1,15 +1,21 @@
 {
   "name": "classroom-quality-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "课堂质量改进智能体 · Sprint 1 课前智能备课（人机协同编码网页版原型）",
+  "description": "课堂质量改进智能体 · 教学资源工作台与音频复盘",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:browser": "playwright test",
+    "speech:prepare": ".venv/bin/python speech/prepare.py"
   },
   "engines": {
     "node": ">=20.12"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@playwright/test": "^1.64.0",
+    "opencc-js": "1.4.2"
+  }
 }

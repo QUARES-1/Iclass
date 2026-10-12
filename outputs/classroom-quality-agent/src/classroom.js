@@ -1,268 +1,162 @@
-// 课中课堂感知模块（Sprint 2）。
-// 把课堂过程的抬头率、语音转写、语速语调等数据组织与分析，
-// 最终生成带时间戳的课堂记录与“状态变化时间段”，供课后复盘使用。
-// 说明：抬头率只统计整体趋势、不做人脸识别；语音转写依赖浏览器 Web Speech API 或人工导入。
-
-// 把秒数格式化为 mm:ss 或 h:mm:ss。
-export function formatTime(totalSec) {
-  const sec = Math.max(0, Math.round(totalSec || 0));
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const mm = String(m).padStart(2, '0');
-  const ss = String(s).padStart(2, '0');
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+import { AppError, id, clone } from './store.js';
+import {simplifiedTranscript,simplifiedReport} from './chineseText.js';
+import {REPORT_SECTIONS,CLASSROOM_TERMINAL_STAGES,hasClassroomTask,analysisSegments} from './classroomShared.js';
+export {REPORT_SECTIONS,CLASSROOM_TERMINAL_STAGES,hasClassroomTask,analysisSegments,textObservations} from './classroomShared.js';
+export function formatTime(seconds) {
+  const t = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
-
-// 把 "mm:ss" 或 "h:mm:ss" 解析为秒数。
-export function parseTime(text) {
-  const parts = String(text || '').trim().split(':').map((n) => parseInt(n, 10));
-  if (parts.some((n) => Number.isNaN(n))) return 0;
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 1) return parts[0];
-  return 0;
+export const emptyClassroom = () => ({ revision: 0, savedAt:null, course: { title: '', description: '' }, courseVersion: 0,audioGeneration:0, audio: null, transcriptVersions: [], currentTranscriptId: null, reports: [], currentReportId: null, jobs: [],conversation:[],conversationGeneration:0 });
+export const transcriptOf = state => state.transcriptVersions.find(t => t.id === state.currentTranscriptId);
+export const reportOf = state => state.reports.find(r => r.id === state.currentReportId);
+// Only audio workflow fields migrate from an older document.
+export function migrateClassroom(raw = {}) {
+  const base = emptyClassroom();
+  for (const key of Object.keys(base)) if (raw[key] !== undefined) base[key] = clone(raw[key]);
+  base.course = { title: String(base.course?.title || ''), description: String(base.course?.description || '') };
+  const audioFields = ['id','file','name','bytes','duration','codec','sampleRate','format','source','createdAt','playbackFile','deleted'];
+  const cleanAudio = audio => audio ? Object.fromEntries(audioFields.filter(k => audio[k] !== undefined).map(k => [k,audio[k]])) : null;
+  base.audio = cleanAudio(base.audio);
+  base.transcriptVersions = base.transcriptVersions.map(t => ({ ...Object.fromEntries(['id','audioId','source','original','createdAt','parentId','processing'].filter(k => t[k] !== undefined).map(k => [k,t[k]])), audio: cleanAudio(t.audio), segments: (t.segments || []).map(s => Object.fromEntries(['id','start','end','text','timestampSource','excluded'].filter(k => s[k] !== undefined).map(k => [k,s[k]]))) }));
+  const cleanSections = sections => Object.fromEntries(Object.keys(REPORT_SECTIONS).map(k => [k,(sections?.[k] || []).filter(item => typeof item.text === 'string' && !/抬头率|注意力回落|投入回升|attention-low|headUpRate/.test(item.text)).map(item => Object.fromEntries(['id','text','kind','evidenceIds','confirmed','edited','timeEvidence'].filter(f => item[f] !== undefined).map(f => [f,item[f]])))]));
+  base.reports = base.reports.map(r => ({ ...Object.fromEntries(['id','transcriptId','courseVersion','course','stale','createdAt','source','coverage','mode','detailSections','parentReportId','detailRequest','textNormalization'].filter(k => r[k] !== undefined).map(k => [k,r[k]])), sections: cleanSections(r.sections), history:(r.history||[]).map(h=>({id:h.id,createdAt:h.createdAt,sections:cleanSections(h.sections)})) }));
+  if (!base.course.title && typeof raw.meta?.course === 'string') base.course.title = raw.meta.course;
+  if (!base.transcriptVersions.length && Array.isArray(raw.segments)) {
+    try { const segments = validateSegments(raw.segments, Infinity, 'legacy-user-timestamps'); const v = { id: id(), source: 'legacy', audioId: null, segments, createdAt: new Date().toISOString() }; base.transcriptVersions = [v]; base.currentTranscriptId = v.id; } catch { /* Invalid old timestamps cannot masquerade as recognition. */ }
+  }
+  return base;
 }
-
-// 构建“两节课 + 课间休息”的课时结构。
-export function buildSchedule(session1Min = 45, breakMin = 10, session2Min = 45) {
-  return [
-    { label: '第一节', type: 'class', minutes: Math.max(0, Number(session1Min) || 0) },
-    { label: '课间休息', type: 'break', minutes: Math.max(0, Number(breakMin) || 0) },
-    { label: '第二节', type: 'class', minutes: Math.max(0, Number(session2Min) || 0) },
-  ];
+export function invalidateReports(state) { state.reports.forEach(r => { r.stale = true; }); }
+export function validateSegments(segments, duration, source) {
+  if (!Array.isArray(segments) || !segments.length || segments.length > 50000) throw new AppError('未识别到有效语音，或片段数量过多。');
+  let previousStart = -1;
+  const out = segments.map(s => {
+    if (!s || typeof s.text !== 'string' || !s.text.trim() || s.text.length > 16000 || !Number.isFinite(s.start) || !Number.isFinite(s.end) || s.start < 0 || s.end <= s.start || s.end > duration + 0.3 || s.start < previousStart) throw new AppError('转写片段时间或文本无效。');
+    previousStart = s.start;
+    if (s.id !== undefined && (typeof s.id !== 'string' || !/^[a-z0-9-]{1,80}$/i.test(s.id))) throw new AppError('转写片段 ID 无效。');
+    return { id: s.id || id(), start: s.start, end: s.end, text: s.text.trim(), timestampSource: s.timestampSource || source };
+  });
+  if (new Set(out.map(s => s.id)).size !== out.length) throw new AppError('转写片段 ID 重复。');
+  return out;
 }
-
-// 计算课时结构总时长（分钟）。
-export function scheduleTotalMinutes(schedule) {
-  const segs = Array.isArray(schedule) ? schedule : [];
-  return segs.reduce((n, s) => n + (Number(s.minutes) || 0), 0);
-}
-
-// 生成模拟抬头率采样，支持课时结构（上课段 + 课间休息段）。
-export function generateSampleHeadUpRateForSchedule(schedule, intervalSec = 30) {
-  const segs = Array.isArray(schedule) && schedule.length
-    ? schedule
-    : [{ label: '课堂', type: 'class', minutes: 45 }];
-  const step = Number(intervalSec) || 30;
-  const samples = [];
-  let clock = 0;
-  for (const seg of segs) {
-    const total = Math.max(0, Number(seg.minutes) || 0) * 60;
-    const isBreak = seg.type === 'break';
-    for (let t = 0; t <= total; t += step) {
-      let rate;
-      if (isBreak) {
-        rate = 0.04 + Math.sin(t * 0.5) * 0.02;
-      } else {
-        const x = total > 0 ? t / total : 0;
-        const base = 0.86 - 0.34 * Math.sin(Math.PI * Math.min(x * 1.2, 1));
-        const interactionBoost = Math.exp(-Math.pow((x - 0.62) / 0.12, 2)) * 0.13;
-        const noise = (Math.sin(t * 0.7) + Math.sin(t * 0.23)) * 0.02;
-        rate = base + interactionBoost + noise;
-      }
-      rate = Math.min(0.98, Math.max(0.02, rate));
-      samples.push({ t: clock + t, rate: Math.round(rate * 1000) / 1000, phase: isBreak ? 'break' : 'class' });
+export function applyClassroomCommand(raw, cmd) {
+  const state = migrateClassroom(raw);
+  if (cmd.action === 'clear') {
+    if (hasClassroomTask(state)) throw new AppError('任务进行中，请先暂停或取消再清空。', 409);
+    return {...emptyClassroom(),audioGeneration:state.audioGeneration+1,conversationGeneration:state.conversationGeneration+1};
+  }
+  if(cmd.action==='clearConversation'){state.conversation=[];state.conversationGeneration++;return state;}
+  if (cmd.action === 'course') {
+    if (typeof cmd.course?.title !== 'string' || typeof cmd.course?.description !== 'string' || cmd.course.title.length > 500 || cmd.course.description.length > 8000) throw new AppError('课程说明格式无效。');
+    if (JSON.stringify(state.course) !== JSON.stringify(cmd.course)) { state.course = cmd.course; state.courseVersion++; invalidateReports(state); }
+  } else if (cmd.action === 'correct') {
+    const current = transcriptOf(state);
+    if (!current || current.id !== cmd.transcriptId) throw new AppError('转写版本已改变，请刷新后重试。', 409);
+    if (!Array.isArray(cmd.segments) || cmd.segments.length !== current.segments.length || !cmd.segments.every((s, i) => s.id === current.segments[i].id && typeof s.text === 'string' && s.text.length <= 16000 && (s.excluded===undefined || typeof s.excluded==='boolean'))) throw new AppError('校正必须保留原片段与时间；可修改文字或排除误识别片段。');
+    const v = { ...current, id: id(), parentId: current.id, source: 'teacher', original: false, segments: current.segments.map((s, i) => ({ ...s, text: cmd.segments[i].text, excluded:cmd.segments[i].excluded===true || !cmd.segments[i].text.trim() })), createdAt: new Date().toISOString() };
+    state.transcriptVersions.push(v); state.currentTranscriptId = v.id; invalidateReports(state);
+  } else if(cmd.action==='simplifyTranscript'){
+    if(hasClassroomTask(state))throw new AppError('请先完成或暂停当前任务，再转换转写字形。',409);
+    const current=transcriptOf(state);
+    if(!current||current.id!==cmd.transcriptId)throw new AppError('转写版本已变化，请刷新后重试。',409);
+    const normalized=simplifiedTranscript(current);
+    if(normalized){
+      const report=reportOf(state);
+      const aligned=report&&!report.stale&&report.transcriptId===current.id&&report.courseVersion===state.courseVersion;
+      const normalizedReport=aligned?simplifiedReport(report,normalized.id):null;
+      state.transcriptVersions.push(normalized);state.currentTranscriptId=normalized.id;invalidateReports(state);
+      if(normalizedReport){state.reports.push(normalizedReport);state.currentReportId=normalizedReport.id;}
     }
-    clock += total;
-  }
-  return samples;
-}
-
-// 向后兼容：单节课（无课间休息）。
-export function generateSampleHeadUpRate(durationMin = 45, intervalSec = 30) {
-  return generateSampleHeadUpRateForSchedule([{ label: '课堂', type: 'class', minutes: durationMin }], intervalSec);
-}
-
-// 分析抬头率：只在“上课”阶段计算均值/最低值和注意力回落，课间休息单独标记。
-export function analyzeHeadUpRate(samples, threshold = 0.6) {
-  const list = (samples || []).slice().sort((a, b) => a.t - b.t);
-  if (!list.length) {
-    return { samples: list, classSamples: [], average: 0, min: 1, max: 0, lowSegments: [], breakSegments: [] };
-  }
-
-  const classSamples = list.filter((s) => s.phase !== 'break');
-
-  let sum = 0;
-  let min = 1;
-  let max = 0;
-  for (const s of classSamples) {
-    sum += s.rate;
-    if (s.rate < min) min = s.rate;
-    if (s.rate > max) max = s.rate;
-  }
-  const average = classSamples.length ? sum / classSamples.length : 0;
-
-  const lowSegments = [];
-  let lowStart = null;
-  let lowPrev = null;
-  for (const s of classSamples) {
-    const low = s.rate < threshold;
-    if (low && lowStart === null) lowStart = s.t;
-    if (!low && lowStart !== null && lowPrev !== null) {
-      lowSegments.push({ start: lowStart, end: lowPrev.t });
-      lowStart = null;
-    }
-    lowPrev = s;
-  }
-  if (lowStart !== null && lowPrev !== null) lowSegments.push({ start: lowStart, end: lowPrev.t });
-
-  const breakSegments = [];
-  let bStart = null;
-  let bPrev = null;
-  for (const s of list) {
-    const isBreak = s.phase === 'break';
-    if (isBreak && bStart === null) bStart = s.t;
-    if (!isBreak && bStart !== null && bPrev !== null) {
-      breakSegments.push({ start: bStart, end: bPrev.t });
-      bStart = null;
-    }
-    bPrev = s;
-  }
-  if (bStart !== null && bPrev !== null) breakSegments.push({ start: bStart, end: bPrev.t });
-
-  return { samples: list, classSamples, average, min, max, lowSegments, breakSegments };
-}
-
-// 解析带时间戳的转写文本。支持两种格式：
-//   [00:00-00:55] 文本
-//   00:00-00:55 文本
-export function parseTranscript(text) {
-  const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const segments = [];
-  const timeRe = /^\[?(\d{1,2}:\d{2}(?::\d{2})?)\s*[-~]\s*(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*(.*)$/;
-  for (const line of lines) {
-    const m = line.match(timeRe);
-    if (m) {
-      segments.push({ start: parseTime(m[1]), end: parseTime(m[2]), text: m[3].trim() });
+  } else if (cmd.action === 'selectAudio') {
+    if(hasClassroomTask(state))throw new AppError('请先暂停当前任务再切换录音。',409);
+    const audio=[state.audio,...state.transcriptVersions.map(t=>t.audio),...state.jobs.map(j=>j.audio)].find(a=>a?.id===cmd.audioId&&!a.deleted);
+    if(!audio)throw new AppError('录音不存在或已删除。',404);
+    state.audio=clone(audio);state.audioGeneration++;
+    state.currentTranscriptId=state.transcriptVersions.filter(t=>t.audioId===audio.id).at(-1)?.id||null;invalidateReports(state);
+  } else if (cmd.action === 'selectTranscript') {
+    if(hasClassroomTask(state))throw new AppError('请先暂停当前任务再切换转写。',409);
+    const t=state.transcriptVersions.find(t=>t.id===cmd.transcriptId);
+    if(!t)throw new AppError('转写版本不存在。',404);
+    state.currentTranscriptId=t.id;state.audio=t.audio&&!t.audio.deleted?clone(t.audio):null;state.audioGeneration++;invalidateReports(state);
+  } else if (['selectReport','restoreReportRevision','confirmReport'].includes(cmd.action)) {
+    if(hasClassroomTask(state))throw new AppError('请先暂停当前任务再切换或确认报告。',409);
+    const r=state.reports.find(r=>r.id===cmd.reportId);
+    if(!r)throw new AppError('报告版本不存在。',404);
+    state.currentReportId=r.id;
+    if(cmd.action==='selectReport') {
+      r.stale=r.transcriptId!==state.currentTranscriptId||r.courseVersion!==state.courseVersion||Boolean(state.transcriptVersions.find(t=>t.id===r.transcriptId)?.audio?.deleted);
+    } else if(cmd.action==='confirmReport') {
+      if(r.stale)throw new AppError('输入已更新，请重新分析后确认。');
+      rememberReport(r);Object.values(r.sections).flat().forEach(item=>item.confirmed=true);
     } else {
-      segments.push({ start: 0, end: 0, text: line });
+      const h=r.history.find(h=>h.id===cmd.historyId);
+      if(!h)throw new AppError('修订版本不存在。',404);
+      const sections=clone(h.sections);rememberReport(r);r.sections=sections;
     }
-  }
-  return segments;
-}
-
-// 分析语速：按转写文本字数与课堂时长估算“字/分钟”，并给出节奏评价。
-export function analyzeSpeechRate(segments, durationMin = 45) {
-  const list = (segments || []).filter((s) => s.text);
-  const chars = list.reduce((n, s) => n + s.text.replace(/\s/g, '').length, 0);
-  const minutes = Math.max(1, Number(durationMin) || 45);
-  const charsPerMin = Math.round(chars / minutes);
-  const level = charsPerMin > 300 ? '偏快' : charsPerMin < 180 ? '偏慢' : '适中';
-  const segmentCount = list.length;
-  const avgCharsPerSegment = segmentCount ? Math.round(chars / segmentCount) : 0;
-  return { chars, charsPerMin, level, segmentCount, avgCharsPerSegment };
-}
-
-// 分析语调/节奏：基于问句数量、停顿词（嗯/啊/这个）做基础统计。
-export function analyzeTone(segments) {
-  const list = (segments || []).filter((s) => s.text);
-  const joined = list.map((s) => s.text).join('');
-  const questions = (joined.match(/[？?]/g) || []).length;
-  const pauses = (joined.match(/[嗯啊呃这个那个]/g) || []).length;
-  const sentences = joined.split(/[。！？!?；;]/).filter((s) => s.trim()).length;
-  const avgSentenceLen = sentences ? Math.round(joined.length / sentences) : 0;
-  return { questions, pauses, sentences, avgSentenceLen };
-}
-
-// 找出抬头率的局部峰值（用于标记互动/投入回升点）。
-function findPeaks(samples, minProminence = 0.06) {
-  const peaks = [];
-  for (let i = 1; i < samples.length - 1; i++) {
-    const prev = samples[i - 1].rate;
-    const cur = samples[i].rate;
-    const next = samples[i + 1].rate;
-    if (cur > prev && cur >= next && cur - Math.min(prev, next) >= minProminence) {
-      peaks.push(samples[i]);
+  } else if (cmd.action === 'reportItem') {
+    const report = reportOf(state);
+    if (!report || report.id !== cmd.reportId || !REPORT_SECTIONS[cmd.section]) throw new AppError('报告版本或分类不存在。', 409);
+    const item = report.sections[cmd.section].find(x => x.id === cmd.itemId);
+    if (!item) throw new AppError('结论不存在。');
+    if (cmd.delete) { rememberReport(report);report.sections[cmd.section] = report.sections[cmd.section].filter(x => x.id !== cmd.itemId); }
+    else if (cmd.confirm) { if (report.stale) throw new AppError('输入已更新，请重新分析后确认。'); if(!item.confirmed){rememberReport(report);item.confirmed = true;} }
+    else {
+      if (typeof cmd.text !== 'string' || !cmd.text.trim() || cmd.text.length > 10000) throw new AppError('修订内容无效。');
+      if (item.text !== cmd.text) { rememberReport(report);item.text = cmd.text; item.confirmed = false; item.edited = true; }
     }
-  }
-  return peaks.slice(0, 6);
+  } else if (cmd.action === 'deleteAudio') {
+    if (state.jobs.some(j => ['queued','processing','loading-model','transcribing'].includes(j.stage))) throw new AppError('正在转写，完成后可删除。', 409);
+    const audioId=state.audio?.id;
+    state.transcriptVersions.forEach(t=>{if(t.audio?.id===audioId)t.audio.deleted=true;});
+    state.jobs.forEach(j=>{if(j.audio?.id===audioId)j.audio.deleted=true;});
+    state.audio = null;state.audioGeneration++; invalidateReports(state);
+  } else throw new AppError('未知课堂操作。', 400);
+  return state;
 }
-
-// 生成课堂时间轴事件：合并课间休息、注意力回落、互动回升与转写片段。
-export function buildTimeline(analysis, speechSegments) {
-  const events = [];
-
-  for (const seg of analysis.breakSegments || []) {
-    events.push({
-      t: seg.start,
-      end: seg.end,
-      type: 'break',
-      label: '课间休息',
-      detail: `课间休息，学生离座放松，抬头率统计暂停（约 ${Math.round((seg.end - seg.start) / 60)} 分钟）`,
+function rememberReport(report){(report.history ||= []).push({id:id(),createdAt:new Date().toISOString(),sections:clone(report.sections)});}
+export function validateReportSections(raw, segments, sectionKeys = Object.keys(REPORT_SECTIONS)) {
+  const ids = new Set(segments.map(s => s.id)), sections = {};
+  for (const key of Object.keys(REPORT_SECTIONS)) {
+    if (!sectionKeys.includes(key)) { sections[key]=[];continue; }
+    if (!Array.isArray(raw?.[key]) || raw[key].length > 100) throw new AppError('AI 报告分类缺失或条目超限。', 502);
+    sections[key] = raw[key].map(item => {
+      if (!item || typeof item.text !== 'string' || !item.text.trim() || item.text.length > 10000 || !Array.isArray(item.evidenceIds) || !item.evidenceIds.length || item.evidenceIds.some(i => !ids.has(i))) throw new AppError('AI 结论缺少有效原文证据，未提交报告。', 502);
+      if (!['transcript', 'teacher-emphasis', 'ai-inference', 'hypothesis', 'timing-estimate'].includes(item.kind)) throw new AppError('AI 未标注结论类型。', 502);
+      if (key === 'difficulties' && item.kind !== 'hypothesis') throw new AppError('潜在难点必须标为推测。', 502);
+      if (key === 'emphasis' && !['teacher-emphasis','ai-inference'].includes(item.kind)) throw new AppError('教学重点須区分原文强调与 AI 归纳。', 502);
+      if (/学生.{0,12}(已掌握|没听懂|已经理解|掌握得|专注|注意力)|全班.{0,8}(听懂|理解|掌握)|抬头率|注意力回落|投入回升|质量总分|测得.{0,8}(语调|响度)/.test(item.text)) throw new AppError('AI 返回了无法由转写支持的结论，未提交报告。', 502);
+      let timeEvidence;
+      if(item.kind==='timing-estimate'){
+        if(!Array.isArray(item.timeEvidence)||!item.timeEvidence.length||item.timeEvidence.length>3)throw new AppError('时间判断须提供timeEvidence起止片段与计算方式，不能只引用几个离散片段。',502);
+        if(/连续(?:讲授|讲解|发言).{0,12}\d+\s*(?:秒|分钟)/.test(item.text))throw new AppError('转写时间不能证明连续讲授，请描述讲解跨度（含片段间隔）并给出起止依据。',502);
+        timeEvidence=item.timeEvidence.map(range=>{
+          const first=segments.find(s=>s.id===range.startId),last=segments.find(s=>s.id===range.endId);
+          if(!first||!last||!['transcript-span','segment-gap'].includes(range.basis))throw new AppError('时间判断的起止片段或计算方式无效。',502);
+          const start=range.basis==='segment-gap'?first.end:first.start,end=range.basis==='segment-gap'?last.start:last.end;
+          if(end<=start)throw new AppError('时间判断区间无效，请核对起止顺序。',502);
+          return {startId:first.id,endId:last.id,basis:range.basis,start,end,seconds:Math.round((end-start)*1000)/1000};
+        });
+      }
+      return { id: id(), text: item.text, evidenceIds: [...new Set([...item.evidenceIds,...(timeEvidence||[]).flatMap(r=>[r.startId,r.endId])])], kind: item.kind, confirmed: false, edited: false,...(timeEvidence?{timeEvidence}:{}) };
     });
   }
-
-  for (const seg of analysis.lowSegments) {
-    events.push({
-      t: seg.start,
-      end: seg.end,
-      type: 'attention-low',
-      label: '注意力回落',
-      detail: `抬头率连续低于阈值，持续约 ${Math.round((seg.end - seg.start) / 60)} 分钟`,
-    });
-  }
-
-  for (const seg of speechSegments) {
-    if (!seg.text) continue;
-    events.push({ t: seg.start, end: seg.end, type: 'speech', label: '语音', detail: seg.text });
-  }
-
-  for (const p of findPeaks(analysis.samples || [])) {
-    if (p.phase === 'break') continue;
-    events.push({ t: p.t, type: 'interaction', label: '互动/投入回升', detail: `抬头率回升至 ${Math.round(p.rate * 100)}%` });
-  }
-
-  return events.sort((a, b) => a.t - b.t);
+  return sections;
 }
-
-// 生成带时间戳的课堂记录（Markdown）。
-export function buildClassroomRecord({ meta, headUpRate, speech, tone, events }) {
-  const lines = ['# 课堂记录（Sprint 2 课中课堂感知）', ''];
-  if (meta) {
-    lines.push(`- 课程：${meta.course || '未命名'}`);
-    lines.push(`- 总时长：${meta.durationMin || 45} 分钟`);
-    if (Array.isArray(meta.schedule) && meta.schedule.length) {
-      lines.push(`- 课时结构：${meta.schedule.map((s) => `${s.label} ${s.minutes} 分钟`).join(' → ')}`);
+export function buildClassroomReport(state) {
+  const report = reportOf(state);
+  if (!report) throw new AppError('尚无分析报告。');
+  const transcript = state.transcriptVersions.find(v => v.id === report.transcriptId);
+  const lines = ['# 课堂音频复盘报告', '', `课程：${report.course.title || '未命名'}`, `课程说明：${report.course.description}`, `转写版本：${report.transcriptId}`, `课程说明版本：${report.courseVersion}`, `报告状态：${report.stale ? '待更新（输入已改变）' : '当前输入'}；条目确认状态见下文`, '', '分析整段录音；未区分全部教师与学生发言。时间节奏基于识别片段范围，不代表精确静音或声学测量。', ''];
+  for (const [key, title] of Object.entries(REPORT_SECTIONS)) {
+    if (!report.sections[key]?.length) continue;
+    lines.push('## ' + title, '');
+    for (const item of report.sections[key]) {
+      lines.push(`- [${item.confirmed && !report.stale ? '已确认' : '待确认'} · ${item.kind}${item.edited ? ' · 教师修订' : ''}] ${item.text}`);
+      for(const range of item.timeEvidence||[])lines.push(`  - 时间依据 ${formatTime(range.start)}—${formatTime(range.end)}：${range.basis==='segment-gap'?'识别片段间隔，不代表精确静音':'讲解跨度，含片段间隔，不代表连续发言'}（约${Math.round(range.seconds)}秒）。`);
+      for (const eid of item.evidenceIds) { const s = transcript?.segments.find(s => s.id === eid); if (s) lines.push(`  - 依据 ${formatTime(s.start)}—${formatTime(s.end)}（${s.id}，${s.timestampSource}）：${s.text}`); }
     }
-    lines.push(`- 开始时间：${meta.startTime || '—'}`);
     lines.push('');
   }
-  lines.push('## 抬头率统计');
-  lines.push(`- 上课阶段平均抬头率：${Math.round(headUpRate.average * 100)}%`);
-  lines.push(`- 最低抬头率：${Math.round(headUpRate.min * 100)}%`);
-  if (Array.isArray(headUpRate.breakSegments) && headUpRate.breakSegments.length) {
-    lines.push('- 课间休息：');
-    for (const seg of headUpRate.breakSegments) {
-      lines.push(`  - ${formatTime(seg.start)} ~ ${formatTime(seg.end)}`);
-    }
-  }
-  if (headUpRate.lowSegments.length) {
-    lines.push('- 注意力回落时间段：');
-    for (const seg of headUpRate.lowSegments) {
-      lines.push(`  - ${formatTime(seg.start)} ~ ${formatTime(seg.end)}`);
-    }
-  } else {
-    lines.push('- 未发现明显注意力回落时间段');
-  }
-  lines.push('');
-
-  lines.push('## 语速与语调');
-  lines.push(`- 语速：约 ${speech.charsPerMin} 字/分钟（${speech.level}）`);
-  lines.push(`- 转写片段：${speech.segmentCount} 段`);
-  if (tone) {
-    lines.push(`- 提问次数：${tone.questions}`);
-    lines.push(`- 停顿/口头语：约 ${tone.pauses} 次`);
-    lines.push(`- 平均句长：约 ${tone.avgSentenceLen} 字`);
-  }
-  lines.push('');
-
-  lines.push('## 带时间戳的课堂时间轴');
-  for (const e of events) {
-    const timeLabel = e.end ? `${formatTime(e.t)}~${formatTime(e.end)}` : formatTime(e.t);
-    lines.push(`- **${timeLabel}** [${e.label}] ${e.detail}`);
-  }
-  lines.push('');
-  lines.push('> 说明：抬头率仅统计整体趋势，不做人脸识别；语音转写建议人工抽样校对。');
   return lines.join('\n');
 }

@@ -145,6 +145,7 @@ export function generateOutline(analysis, supplements = []) {
 
 // 把 PPT 大纲序列化为 Markdown 文本，便于教师导出与进一步编辑。
 export function toMarkdown(slides, options = {}) {
+  if (options.confirmedOnly && (!(slides || []).some(s => s.status !== 'deleted') || (slides || []).some(s => s.status !== 'deleted' && s.status !== 'confirmed'))) throw new Error('全部有效页面确认后才能导出正式稿。');
   const sections = ['导入', '讲解', '案例', '互动', '总结'];
   const lines = ['# PPT 初稿（Sprint 1 课前智能备课）', ''];
   // 过滤掉“已删除”的幻灯片，确保人工审核中删除的内容不会出现在导出的大纲里。
@@ -158,6 +159,14 @@ export function toMarkdown(slides, options = {}) {
     for (const slide of group) {
       lines.push(`### ${slide.title}`);
       for (const bullet of slide.bullets) lines.push(`- ${bullet}`);
+      if (slide.example) lines.push(`> 示例：${slide.example}`);
+      if (slide.counterExample) lines.push(`> 反例：${slide.counterExample}`);
+      if(slide.code){
+        const fence='`'.repeat(Math.max(3,...(slide.code.source.match(/`+/g)||[]).map(x=>x.length+1)));
+        lines.push('',slide.code.kind==='output'?'预期运行输出：':'示例代码：',fence+slide.code.language.replace(/[^a-zA-Z0-9+#.-]/g,''),slide.code.source,fence);
+        if(slide.code.expectedOutput)lines.push('预期运行输出：',fence+'text',slide.code.expectedOutput,fence);
+      }
+      if (slide.attachment) lines.push(`\n[打开互动：${slide.attachment.title}](./${slide.attachment.fileName}) · 配套 HTML 请与课件保存在同一文件夹。`);
       for (const note of slide.notes) lines.push(`> 备注：${note}`);
       lines.push('');
     }

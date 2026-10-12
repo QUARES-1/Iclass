@@ -1,12 +1,14 @@
 // PPT 导出模块：使用 PowerPoint 原生文本、形状和表格生成可编辑课件。
 // PptxGenJS 构造器通过参数注入，使同一套逻辑可同时用于浏览器下载与 Node 验证。
+import { validateCodeBlock, splitCodeSource,splitCodeOutput,codeDisplayRows,codeFunctionNames } from './codeBlock.js';
 
 export const PPT_THEME = Object.freeze({
   layoutName: 'TEACHING_16X9',
   width: 13.333,
   height: 7.5,
-  fontFace: 'Microsoft YaHei',
-  latinFontFace: 'Arial',
+  fontFace: 'SimSun',
+  latinFontFace: 'SimSun',
+  codeFontFace: 'Consolas',
   colors: Object.freeze({
     paper: 'F7F8FC',
     white: 'FFFFFF',
@@ -27,7 +29,7 @@ export const PPT_THEME = Object.freeze({
 });
 
 const ALLOWED_LAYOUTS = new Set([
-  'cover', 'intro', 'concept', 'algorithm', 'comparison', 'case', 'interaction', 'summary',
+  'cover', 'intro', 'concept', 'algorithm', 'comparison', 'case', 'interaction', 'summary', 'code',
 ]);
 
 const SECTION_ACCENTS = {
@@ -156,8 +158,29 @@ function splitLongText(value, maxLength = 62) {
   return pieces;
 }
 
-function continuationTitle(title) {
-  return title;
+export function cleanSlideTitle(title) {
+  return String(title ?? '').trim().replace(/(?:\s*[（(](?:续|代码)\s*\d+(?:\s*\/\s*\d+)?[）)])+\s*$/g,'').trim();
+}
+
+export function pageTitleFor(title,page,index=0) {
+  const base=cleanSlideTitle(title)||'教学内容';
+  const label=value=>`${base.replace(/[：:].*$/,'').slice(0,70)}：${value}`.slice(0,200);
+  if(page.code){
+    if(page.code.kind==='output')return label('运行输出');
+    const names=codeFunctionNames(page.code.source,page.code.language);
+    if(names.length)return label(names.slice(0,3).join(' / ')+ ' 实现');
+    const structure=page.code.source.match(/\b(?:struct|class)\s+([A-Za-z_]\w*)/);
+    if(structure)return label(structure[1]+' 数据定义');
+    if(/^\s*#\s*include\b/m.test(page.code.source))return label('依赖与数据定义');
+    if(/\b(?:cin|scanf|read)\b/.test(page.code.source))return label('输入读取与操作准备');
+    if(/\b(?:cout|printf)\b/.test(page.code.source))return label('结果输出');
+    return label('核心代码');
+  }
+  if(!index)return base;
+  const first=asTextList(page.steps?.length?page.steps:page.bullets)[0]||'';
+  const topic=first.match(/^([^：:]{2,28})[：:]/)?.[1]?.trim();
+  const sentence=first.split(/[。；;]/)[0].trim();
+  return topic&&topic!==base?label(topic):sentence&&sentence.length<=28&&sentence!==base?label(sentence):label('补充说明');
 }
 
 function chunk(items, size) {
@@ -167,6 +190,15 @@ function chunk(items, size) {
 }
 
 function paginateItem(item) {
+  if(item.code){
+    const code=validateCodeBlock(item.code),{code:ignored,...explanation}=item;
+    const intro=(item.bullets?.length||item.steps?.length||item.example||item.counterExample)?paginateItem({...explanation,layout:explanation.layout==='code'?'concept':explanation.layout}):[];
+    const pieces=code.kind==='output'?splitCodeOutput(code.source):splitCodeSource(code.source,20,code.language);
+    const sourcePages=pieces.map((source,i)=>{const page={...explanation,bullets:[],steps:[],example:undefined,counterExample:undefined,layout:'code',code:{...code,source,expectedOutput:undefined,part:pieces.length>1?i+1:(code.part||1),parts:pieces.length>1?pieces.length:(code.parts||1)}};return {...page,title:intro.length||pieces.length>1||code.expectedOutput?pageTitleFor(item.title,page,i):cleanSlideTitle(item.title)};});
+    const outputs=code.expectedOutput?splitCodeOutput(code.expectedOutput):[];
+    const outputPages=outputs.map((source,i)=>{const page={...explanation,bullets:[],steps:[],example:undefined,counterExample:undefined,layout:'code',code:{language:'text',source,kind:'output',...(code.blockId?{blockId:code.blockId}:{}),part:i+1,parts:outputs.length}};return {...page,title:pageTitleFor(item.title,page,i)};});
+    return [...intro,...sourcePages,...outputPages];
+  }
   const rawBullets = asTextList(item.bullets);
   const rawSteps = asTextList(item.steps);
   const layout = selectSlideLayout(item);
@@ -200,12 +232,15 @@ function paginateItem(item) {
   return pages.map((pageItems, index) => {
     const page = {
       ...item,
-      title: continuationTitle(normalizeMathText(item.title) || '教学内容'),
+      title: cleanSlideTitle(item.title) || '教学内容',
       bullets: field === 'bullets' ? pageItems : bullets.slice(0, 4),
       notes: asTextList(item.notes),
     };
     if (hasSteps) page.steps = field === 'steps' ? pageItems : steps;
     if (hasRows) page.comparisonRows = field === 'comparisonRows' ? pageItems : rows;
+    // Examples illustrate a topic once; continuation pages carry new content.
+    if(index){delete page.example;delete page.counterExample;delete page.attachment;}
+    if(index)page.title=pageTitleFor(item.title,page,index);
     return page;
   });
 }
@@ -234,6 +269,7 @@ export function deriveCoverContent(analysis = {}, slides = []) {
 
 // 兼容旧数据：显式 layout 优先，否则从环节、标题与正文语义推断。
 export function selectSlideLayout(item = {}) {
+  if(item.code)return 'code';
   if (ALLOWED_LAYOUTS.has(item.layout)) return item.layout;
   if (item.section === '封面') return 'cover';
   if (item.section === '导入') return 'intro';
@@ -249,22 +285,27 @@ export function selectSlideLayout(item = {}) {
   return 'concept';
 }
 
-// 初稿排除“已删除”；正式稿通过 confirmedOnly 仅保留“已确认”内容。
+// 正式稿必须完整确认，不能静默排除未确认页。
 export function slidesToExportModel(slides, options = {}) {
+  if (options.confirmedOnly && (!(slides || []).some(s => s.status !== 'deleted') || (slides || []).some(s => s.status !== 'deleted' && s.status !== 'confirmed'))) {
+    throw new Error('当前 PPT 全部有效页面确认后才能导出正式稿。');
+  }
   const items = (slides || [])
     .filter((slide) => slide.status !== 'deleted'
       && (!options.confirmedOnly || slide.status === 'confirmed'))
     .flatMap((slide) => {
       const item = {
+        id: slide.id,
+        status: slide.status,
         section: slide.section,
         title: slide.title,
         bullets: slide.bullets || [],
         notes: slide.notes || [],
       };
-      ['layout', 'visualType', 'steps', 'metrics', 'comparisonRows', 'emphasis', 'example', 'counterExample'].forEach((field) => {
+      ['layout', 'visualType', 'steps', 'metrics', 'comparisonRows', 'emphasis', 'example', 'counterExample', 'code', 'attachment', 'paginationRootId'].forEach((field) => {
         if (slide[field] !== undefined) item[field] = slide[field];
       });
-      return paginateItem(item);
+      return options.canonical ? [item] : paginateItem(item);
     });
 
   if (options.coverTitle) {
@@ -307,9 +348,9 @@ function accentFor(item) {
   return SECTION_ACCENTS[item.section] || PPT_THEME.colors.indigo;
 }
 
-function addFooter(pptx, slide, index, total) {
+function addFooter(pptx, slide, index, total, item = {}) {
   addLine(pptx, slide, 0.55, 7.08, 12.23, 0, PPT_THEME.colors.line, 0.6);
-  addText(slide, '课堂教学课件', {
+  addText(slide, item.draft ? '课堂教学课件 · 草稿（待确认）' : '课堂教学课件', {
     x: 0.58, y: 7.16, w: 2.3, h: 0.18, fontSize: 9, color: PPT_THEME.colors.muted,
   });
   addText(slide, `${index + 1} / ${total}`, {
@@ -324,13 +365,13 @@ function addContentFrame(pptx, slide, item, index, total) {
     x: 0.62, y: 0.31, w: 1.25, h: 0.28, fontSize: 11.5, bold: true, color: accent,
     charSpacing: 1.2,
   });
-  addText(slide, item.title || '教学内容', {
+  addText(slide, cleanSlideTitle(item.title) || '教学内容', {
     x: 0.62, y: 0.67, w: 11.9, h: 0.62, fontSize: 31, bold: true, color: PPT_THEME.colors.ink,
     valign: 'mid', fit: 'shrink',
   });
   addLine(pptx, slide, 0.62, 1.43, 1.08, 0, accent, 3);
   addLine(pptx, slide, 1.7, 1.43, 11.02, 0, PPT_THEME.colors.line, 0.8);
-  addFooter(pptx, slide, index, total);
+  addFooter(pptx, slide, index, total, item);
 }
 
 function addBulletList(slide, bullets, x, y, w, h, accent, fontSize = 19) {
@@ -441,18 +482,34 @@ function addConceptSlide(pptx, item, index, total) {
   addContentFrame(pptx, slide, item, index, total);
   const bullets = asTextList(item.bullets);
   const accent = PPT_THEME.colors.indigo;
-  addText(slide, '核心定义', {
-    x: 0.72, y: 1.86, w: 2, h: 0.35, fontSize: 14, bold: true, color: accent,
-  });
-  addText(slide, bullets[0] || item.title, {
-    x: 0.72, y: 2.33, w: 5.35, h: 2.75, fontSize: 25, bold: true,
-    color: PPT_THEME.colors.ink, valign: 'mid', fit: 'shrink',
-  });
-  addLine(pptx, slide, 6.45, 1.86, 0, 4.86, PPT_THEME.colors.line, 1);
   const example = normalizeMathText(item.example);
   const counterExample = normalizeMathText(item.counterExample);
   const hasAiExamples = Boolean(example || counterExample);
-  addText(slide, hasAiExamples ? '示例与反例' : '关键理解与辨析', {
+  // A one-point page has no secondary content: use the full body width rather
+  // than drawing an empty labelled column or adding invented explanations.
+  if (!hasAiExamples && bullets.length < 2) {
+    if (bullets.length) {
+      addText(slide, '核心内容', {
+        x: 0.72, y: 1.86, w: 2, h: 0.35, fontSize: 14, bold: true, color: accent,
+      });
+      addBulletList(slide, bullets, 0.78, 2.33, 11.75, 4.12, accent, 25);
+    }
+    return slide;
+  }
+  addText(slide, '核心定义', {
+    x: 0.72, y: 1.86, w: 2, h: 0.35, fontSize: 14, bold: true, color: accent,
+  });
+  if (hasAiExamples && bullets.length > 1) {
+    addBulletList(slide, bullets, 0.76, 2.33, 5.35, 4.12, accent, 21);
+  } else {
+    addText(slide, bullets[0] || item.title, {
+      x: 0.72, y: 2.33, w: 5.35, h: 2.75, fontSize: 25, bold: true,
+      color: PPT_THEME.colors.ink, valign: 'mid', fit: 'shrink',
+    });
+  }
+  addLine(pptx, slide, 6.45, 1.86, 0, 4.86, PPT_THEME.colors.line, 1);
+  const supportingTitle = example && counterExample ? '示例与反例' : example ? '示例说明' : counterExample ? '边界辨析' : '关键理解与辨析';
+  addText(slide, supportingTitle, {
     x: 6.82, y: 1.86, w: 3, h: 0.35, fontSize: 14, bold: true, color: accent,
   });
   if (hasAiExamples) {
@@ -784,6 +841,15 @@ function addFallbackSlide(pptx, item, index, total) {
 }
 
 // 构建 pptx 实例（不触发下载），由调用方决定 writeFile 或浏览器下载。
+function addCodeSlide(pptx,item,index,total){
+  const slide=pptx.addSlide();addContentFrame(pptx,slide,item,index,total);
+  addText(slide,(item.code.kind==='output'?'预期运行输出':'示例代码 · '+item.code.language)+(item.code.parts>1?` · ${item.code.part}/${item.code.parts}`:''),{x:0.78,y:1.78,w:11.7,h:0.3,fontSize:13,color:PPT_THEME.colors.muted});
+  slide.addShape(pptx.ShapeType.rect,{x:0.72,y:2.22,w:11.85,h:4.5,fill:{color:'F3F5F8'},line:{color:'D9DFEA'}});
+  const rows=codeDisplayRows(item.code.source),fontSize=Math.min(14.5,Math.max(11,4.55*72/(Math.max(1,rows)*1.05)));
+  slide.addText(item.code.source,{x:0.95,y:2.28,w:11.4,h:4.55,fontFace:PPT_THEME.codeFontFace,fontSize,color:PPT_THEME.colors.ink,margin:0,breakLine:false,valign:'top',fit:'shrink',lineSpacingMultiple:1.0,paraSpaceAfter:0});
+  return slide;
+}
+
 export function buildPresentation(model, PptxGenJS) {
   const pptx = new PptxGenJS();
   pptx.defineLayout({ name: PPT_THEME.layoutName, width: PPT_THEME.width, height: PPT_THEME.height });
@@ -803,7 +869,8 @@ export function buildPresentation(model, PptxGenJS) {
   items.forEach((item, index) => {
     const layout = selectSlideLayout(item);
     let slide;
-    if (layout === 'cover') slide = addCoverSlide(pptx, item);
+    if (layout === 'code') slide = addCodeSlide(pptx, item, index, items.length);
+    else if (layout === 'cover') slide = addCoverSlide(pptx, item);
     else if (layout === 'intro') slide = addIntroSlide(pptx, item, index, items.length);
     else if (layout === 'concept') slide = addConceptSlide(pptx, item, index, items.length);
     else if (layout === 'algorithm') slide = addAlgorithmSlide(pptx, item, index, items.length);
@@ -812,6 +879,11 @@ export function buildPresentation(model, PptxGenJS) {
     else if (layout === 'interaction') slide = addInteractionSlide(pptx, item, index, items.length);
     else if (layout === 'summary') slide = addSummarySlide(pptx, item, index, items.length);
     else slide = addFallbackSlide(pptx, item, index, items.length);
+
+    if (item.attachment) {
+      addText(slide, '打开互动：' + item.attachment.fileName, { x: 0.78, y: 6.9, w: 11.7, h: 0.3, fontSize: 11, color: PPT_THEME.colors.blue, hyperlink: { url: item.attachment.fileName } });
+      slide.addNotes('将配套 HTML 与 PPTX 放在同一文件夹；若演示软件不允许本地链接，请直接用浏览器打开 ' + item.attachment.fileName);
+    }
 
     if (asTextList(item.notes).length) slide.addNotes(asTextList(item.notes).join('\n'));
   });

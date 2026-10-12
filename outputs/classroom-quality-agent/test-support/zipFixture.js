@@ -1,5 +1,5 @@
 // 构造只使用“存储”压缩方式的最小 ZIP，供 PPTX 解析测试使用。
-// 解析器不校验 CRC，因此测试夹具可以保持零依赖和较小体积。
+import { crc32 } from '../src/crc32.js';
 export function createStoredZip(entries) {
   const localParts = [];
   const centralParts = [];
@@ -14,7 +14,7 @@ export function createStoredZip(entries) {
     localHeader.writeUInt16LE(20, 4);
     localHeader.writeUInt16LE(0, 6);
     localHeader.writeUInt16LE(0, 8);
-    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(crc32(dataBuffer), 14);
     localHeader.writeUInt32LE(dataBuffer.length, 18);
     localHeader.writeUInt32LE(dataBuffer.length, 22);
     localHeader.writeUInt16LE(nameBuffer.length, 26);
@@ -27,7 +27,7 @@ export function createStoredZip(entries) {
     centralHeader.writeUInt16LE(20, 6);
     centralHeader.writeUInt16LE(0, 8);
     centralHeader.writeUInt16LE(0, 10);
-    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(crc32(dataBuffer), 16);
     centralHeader.writeUInt32LE(dataBuffer.length, 20);
     centralHeader.writeUInt32LE(dataBuffer.length, 24);
     centralHeader.writeUInt16LE(nameBuffer.length, 28);

@@ -1,5 +1,5 @@
-// Web 服务入口：托管静态页面，并提供安全的后端 LLM 大纲生成接口。
-// 仅使用 Node.js 内置模块，无需安装第三方依赖。
+// Web 服务入口：托管静态页面，并提供教学资源与课堂音频接口。
+// 互动候选的运行校验使用已安装的 Playwright 与本机 Chrome。
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -7,6 +7,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeMaterialsWithLLM, generateOutlineWithLLM } from './src/llm.js';
 import { extractUploadedFile, FileParseError, MAX_UPLOAD_BYTES } from './src/fileParser.js';
+import { createApi, json } from './src/api.js';
+import { stopSpeechWorkers } from './src/speech.js';
+import { ModelSettings } from './src/modelSettings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -27,6 +30,7 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const LLM_RATE_LIMIT_MAX = Math.max(1, Number(process.env.LLM_RATE_LIMIT) || 10);
 const FILE_PARSE_RATE_LIMIT_MAX = Math.max(1, Number(process.env.FILE_PARSE_RATE_LIMIT) || 30);
 const requestBuckets = new Map();
+const modelSettings = new ModelSettings(process.env.DATA_DIR || path.join(ROOT, 'data'));
 
 // 常用文件类型到 Content-Type 的映射，避免浏览器把 JS/CSS 当作文本误读。
 const MIME = {
@@ -52,6 +56,9 @@ function resolvePath(urlPath) {
     return null;
   }
   const relative = pathname === '/' ? 'public/home.html' : pathname.replace(/^\/+/, '');
+  const shared = new Set(['pptExport.js', 'pptGenerator.js', 'codeBlock.js', 'review.js', 'interactive.js', 'docxReader.js', 'frontier.js', 'analyzer.js', 'uploadPolicy.js','classroomShared.js']);
+  if (!(relative.startsWith('public/') && !relative.split('/').some(p => p.startsWith('.') || p === '..'))
+      && !(relative.startsWith('src/') && shared.has(relative.slice(4)))) return null;
   const absolute = path.resolve(ROOT, relative);
   // 解析后的路径必须仍然位于项目根目录之内。
   if (absolute !== ROOT && !absolute.startsWith(ROOT + path.sep)) {
@@ -63,16 +70,16 @@ function resolvePath(urlPath) {
 // 读取 JSON 请求体（限制大小，避免恶意超大请求）。
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
-    let data = '';
+    const chunks = [];let bytes=0,tooLarge=false;
     req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > 5 * 1024 * 1024) {
-        reject(new Error('请求体过大。'));
-        req.destroy();
-      }
+      bytes+=chunk.length;
+      if(bytes>5*1024*1024){tooLarge=true;return;}
+      chunks.push(chunk);
     });
     req.on('end', () => {
+      if(tooLarge){reject(new Error('请求体过大。'));return;}
       try {
+        const data=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
         resolve(data ? JSON.parse(data) : {});
       } catch (error) {
         reject(error);
@@ -185,7 +192,7 @@ async function handleGenerateOutline(req, res) {
   }
 
   try {
-    const result = await generateOutlineWithLLM(analysis, supplements);
+    const result = await generateOutlineWithLLM(analysis, supplements, await modelSettings.read());
     res.writeHead(200, jsonHeaders);
     res.end(JSON.stringify(result));
   } catch (error) {
@@ -215,7 +222,7 @@ async function handleAnalyzeMaterials(req, res) {
   }
 
   try {
-    const result = await analyzeMaterialsWithLLM(materials);
+    const result = await analyzeMaterialsWithLLM(materials, await modelSettings.read());
     res.writeHead(200, jsonHeaders);
     res.end(JSON.stringify(result));
   } catch (error) {
@@ -255,9 +262,24 @@ async function handleExtractFile(req, res, requestUrl) {
   }
 }
 
-export const server = http.createServer((req, res) => {
+const api = createApi(ROOT, { modelSettings });
+export const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
   const requestUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
+  if (req.method === 'POST' && (['/api/workspace/chat', '/api/workspace/agent', '/api/classroom/analyze','/api/classroom/chat', '/api/model-settings/test'].includes(requestUrl.pathname) || /\/api\/workspace\/agent\/[a-f0-9-]+\/resume$/.test(requestUrl.pathname)) && isRateLimited(req, 'llm', LLM_RATE_LIMIT_MAX)) {
+    json(res, { error: '模型请求过于频繁，请一分钟后重试。' }, 429); return;
+  }
+
+  try {
+    if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+      json(res, { error: '拒绝外部来源请求。' }, 403); return;
+    }
+    if (await api(req, res, requestUrl)) return;
+  } catch (error) {
+    if (!res.headersSent) json(res, { error: error.message || '保存或处理失败，请重试。' }, error.statusCode || 500);
+    else res.end();
+    return;
+  }
 
   if (req.method === 'POST' && requestUrl.pathname === '/api/extract-file') {
     if (isRateLimited(req, 'file', FILE_PARSE_RATE_LIMIT_MAX)) {
@@ -347,6 +369,9 @@ const isMainModule = process.argv[1]
   && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
+  for (const signal of ['SIGINT','SIGTERM']) process.on(signal, () => {
+    stopSpeechWorkers(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 1000).unref();
+  });
   server.listen(PORT, HOST, () => {
     console.log(`课堂质量改进智能体已启动：http://${HOST}:${PORT}`);
   });

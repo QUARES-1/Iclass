@@ -1,0 +1,40 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Local editor files
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets; keep the configuration template
+.env
+.env.*
+!.env.example
+
+# Installed dependencies and Python caches
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime logs and local caches
+*.log
+*.pid
+*.pid.lock
+.cache/
+.npm/
+
+# Test reports and coverage
+test-results/
+playwright-report/
+blob-report/
+coverage/
+.nyc_output/
+.coverage
+.coverage.*

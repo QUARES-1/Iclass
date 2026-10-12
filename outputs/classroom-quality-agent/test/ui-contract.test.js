@@ -1,46 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const html = fs.readFileSync(path.join(projectDir, 'public/index.html'), 'utf8');
-const main = fs.readFileSync(path.join(projectDir, 'public/main.js'), 'utf8');
-
-test('上传入口只展示当前支持的资料类型', () => {
-  assert.match(html, /accept="[^"]*\.docx[^"]*\.pptx/);
-  assert.doesNotMatch(html, /accept="[^"]*\.pdf/);
-});
-
-test('首页教学资料输入框初始为空', () => {
-  const textareas = [...html.matchAll(/<textarea[^>]*>([\s\S]*?)<\/textarea>/g)];
-  assert.ok(textareas.length >= 4, '应存在四类教学资料输入框');
-  assert.ok(textareas.every((match) => match[1].trim() === ''));
-});
-
-test('PPT 生成按钮使用精简后的文案', () => {
-  assert.ok(html.includes('AI 生成 PPT'));
-  assert.ok(!html.includes('AI 重新生成 PPT'));
-  assert.ok(!html.includes('浏览器不会接触或保存 API Key'));
-});
-
-test('前沿补充不再显示已核验或待核验标签', () => {
-  assert.ok(!html.includes('待核验'));
-  assert.ok(!main.includes("item.needsVerify ? '待核验' : '已核验'"));
-});
-
-test('全部确认按钮位于审核列表之后的底部操作栏', () => {
-  const listIndex = html.indexOf('id="review-list"');
-  const confirmIndex = html.indexOf('id="btn-confirm-all"');
-  const finalExportIndex = html.indexOf('id="btn-export-pptx-final"');
-  assert.ok(listIndex >= 0 && confirmIndex > listIndex);
-  assert.ok(finalExportIndex > confirmIndex);
-});
-
-test('前端源码不包含后端密钥变量或硬编码 Key', () => {
-  const publicFiles = ['index.html', 'main.js', 'sample.js']
-    .map((name) => fs.readFileSync(path.join(projectDir, 'public', name), 'utf8'))
-    .join('\n');
-  assert.doesNotMatch(publicFiles, /LLM_API_KEY|DEEPSEEK_API_KEY|sk-[A-Za-z0-9_-]{16,}/);
-});
+const read=name=>fs.readFileSync(new URL('../public/'+name,import.meta.url),'utf8');
+const html=read('index.html'),main=read('main.js'),sprint=read('sprint2.js')+read('sprint2.html');
+test('工作台提供三栏、小屏切换、对话、版本与确认入口',()=>{for(const text of ['资料与资源','预览与编辑','连续对话','id="history"','id="scope"'])assert.ok(html.includes(text));assert.match(html,/accept="[^"]*\.docx[^"]*\.pptx/);assert.doesNotMatch(html,/accept="[^"]*\.pdf/);});
+test('资料输入初始为空，生成请求不要求上传文件',()=>{assert.ok([...html.matchAll(/<textarea[^>]*>([\s\S]*?)<\/textarea>/g)].every(m=>!m[1].trim()));assert.match(html,/AI 生成 PPT/);});
+test('正式导出和确认位于页面列表之后',()=>{assert.ok(html.indexOf('id="btn-confirm-all"')>html.indexOf('id="review-list"'));assert.ok(html.indexOf('id="btn-export-pptx-final"')>html.indexOf('id="btn-confirm-all"'));});
+test('互动沙箱与消息来源校验不提供同源权限',()=>{assert.match(main,/sandbox','allow-scripts'/);assert.doesNotMatch(main,/allow-same-origin/);assert.match(main,/event.source !== frame/);assert.match(main,/event.data\?\.token !== previewToken/);});
+test('课堂页面只接受音频，停止后保存，再启动真实转写',()=>{assert.match(sprint,/new MediaRecorder/);assert.doesNotMatch(sprint,/SpeechRecognition|webkitSpeechRecognition|<video|video\/|headUpRate|attention-low|抬头率/);assert.match(sprint,/save-recording/);assert.match(sprint,/api\/classroom\/transcribe/);});
+test('所有前端源码都不包含后端密钥或硬编码Key',()=>{const files=fs.readdirSync(new URL('../public/',import.meta.url)).filter(n=>/\.(html|js)$/.test(n));assert.doesNotMatch(files.map(read).join('\n'),/LLM_API_KEY|DEEPSEEK_API_KEY|sk-[A-Za-z0-9_-]{16,}/);});

@@ -1,130 +1,19 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>课堂质量改进智能体 · Sprint 2 课中课堂感知</title>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="brand">
-        <span class="brand-mark">课</span>
-        <div>
-          <h1>课堂质量改进智能体</h1>
-          <p class="subtitle">Sprint 2 · 课中课堂感知（人机协同编码 · 网页版原型）</p>
-        </div>
-      </div>
-      <a class="dod-badge home-link" href="./home.html">← 返回首页</a>
-    </div>
-  </header>
-
-  <nav class="stepper" aria-label="实验流程">
-    <button class="step is-active" data-step="1"><span class="step-num">1</span><span>课堂设置</span></button>
-    <button class="step" data-step="2"><span class="step-num">2</span><span>数据采集</span></button>
-    <button class="step" data-step="3"><span class="step-num">3</span><span>课堂感知分析</span></button>
-    <button class="step" data-step="4"><span class="step-num">4</span><span>课堂时间轴</span></button>
-  </nav>
-
-  <main class="content">
-    <!-- 步骤1：课堂设置 -->
-    <section class="panel is-active" data-panel="1">
-      <h2>① 课堂设置</h2>
-      <p class="muted">按“一节课 → 课间休息 → 下一节课”的真实节奏填写。抬头率只统计整体趋势、不做人脸识别。</p>
-      <div class="toolbar">
-        <button class="btn" id="btn-sample2">载入示例数据</button>
-        <button class="btn btn-ghost" id="btn-clear2">清空</button>
-      </div>
-      <div class="material-grid">
-        <label class="field">
-          <span class="field-label">课程名称</span>
-          <input type="text" id="inp-course" value="数据结构 · 第5章 排序算法" />
-        </label>
-        <label class="field">
-          <span class="field-label">开始时间</span>
-          <input type="time" id="inp-start" value="08:00" />
-        </label>
-        <label class="field">
-          <span class="field-label">第一节时长（分钟）</span>
-          <input type="number" id="inp-session1" value="45" min="5" max="120" />
-        </label>
-        <label class="field">
-          <span class="field-label">课间休息（分钟）</span>
-          <input type="number" id="inp-break" value="10" min="0" max="60" />
-        </label>
-        <label class="field">
-          <span class="field-label">第二节时长（分钟）</span>
-          <input type="number" id="inp-session2" value="45" min="0" max="120" />
-        </label>
-        <label class="field">
-          <span class="field-label">抬头率采样间隔（秒）</span>
-          <input type="number" id="inp-interval" value="30" min="10" max="300" />
-        </label>
-      </div>
-      <div class="panel-actions">
-        <button class="btn btn-primary" id="btn-to-transcript">开始数据采集 →</button>
-      </div>
-    </section>
-
-    <!-- 步骤2：数据采集 -->
-    <section class="panel" data-panel="2">
-      <h2>② 课堂数据采集</h2>
-      <p class="muted">上传课堂录像/录音，或直接粘贴带时间戳的转写文本。抬头率来自课堂视频；语音转写可由视频/录音提取。</p>
-
-      <div class="upload-zone" id="upload-zone">
-        <input type="file" id="media-file" accept="video/*,audio/*" hidden />
-        <div class="upload-hint">📤 点击或拖拽上传课堂视频 / 录音文件</div>
-        <div class="upload-sub">支持 mp4、webm、mp3、wav、m4a 等格式；原型演示会生成示意转写与抬头率，真实识别需接入 ASR。</div>
-      </div>
-      <div class="media-preview" id="media-preview"></div>
-      <div class="ai-status" id="upload-status"></div>
-
-      <div class="section-gap"></div>
-      <div class="toolbar">
-        <button class="btn" id="btn-record">🎙 实时录音转写（可选）</button>
-        <button class="btn btn-ghost" id="btn-stop-record" disabled>停止</button>
-        <span class="ai-status" id="record-status"></span>
-      </div>
-
-      <label class="field">
-        <span class="field-label">转写文本（可手动编辑替换为真实结果）</span>
-        <textarea id="transcript-input" rows="9" placeholder="粘贴转写文本，每行：[00:00-00:55] 内容"></textarea>
-      </label>
-
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <button class="btn btn-primary" id="btn-to-analysis">分析课堂感知 →</button>
-      </div>
-    </section>
-
-    <!-- 步骤3：课堂感知分析 -->
-    <section class="panel" data-panel="3">
-      <h2>③ 课堂感知分析</h2>
-      <p class="muted">抬头率整体趋势（含课间休息）、语速语调分析，以及注意力回落时间段。</p>
-      <div id="analysis-result2" class="analysis-result"></div>
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <button class="btn btn-primary" id="btn-to-timeline">生成课堂时间轴 →</button>
-      </div>
-    </section>
-
-    <!-- 步骤4：课堂时间轴 -->
-    <section class="panel" data-panel="4">
-      <h2>④ 课堂时间轴与记录</h2>
-      <p class="muted">整合抬头率、语音转写与状态变化，生成带时间戳的课堂记录。</p>
-      <div id="timeline-result" class="timeline-result"></div>
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <div class="actions-right">
-          <button class="btn btn-ghost" id="btn-export-record">导出课堂记录（Markdown）</button>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="app-footer">课堂质量改进智能体 · 爱教学项目 · Team11 · Sprint 2 课中课堂感知</footer>
-
-  <script type="module" src="./sprint2.js"></script>
-</body>
-</html>
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>课堂音频复盘 · 爱教学</title><link rel="stylesheet" href="./workbench.css"><link rel="stylesheet" href="./calm.css"><link rel="stylesheet" href="./audio.css"></head><body>
+<header><a class="brand" href="./home.html">爱教学 <span>课堂音频复盘</span></a><nav><a href="./settings.html" target="_blank" rel="noopener">模型与提示词设置</a><a href="./index.html">教学资源工作台 →</a><span id="save-status" role="status">正在恢复…</span></nav></header><div id="notice" role="alert" hidden></div>
+<main class="audio-layout">
+<aside class="panel audio-input"><h2>课堂录音</h2><p class="muted">本页独立保存课程与录音。分析整段课堂，不区分全部说话人。</p>
+<details id="course-options"><summary>课程说明</summary><label>课程名称<input id="course-title" maxlength="500" placeholder="本次课堂的课程名称"></label><label>课程说明<textarea id="course-description" rows="4" maxlength="8000" placeholder="课程主题、授课对象与希望复盘的问题"></textarea></label><button id="save-course">保存课程说明</button></details>
+<label>上传录音<input type="file" id="audio-file" accept=".wav,.mp3,.m4a,.webm,.ogg"></label><details id="audio-requirements"><summary>支持格式与文件限制</summary><p>WAV / MP3 / M4A / WebM / OGG</p><p id="audio-limits" class="muted">最多512 MiB、3小时，需要有效音轨；不接受课堂视频。</p></details><p id="upload-status" class="muted" role="status"></p><button id="cancel-audio-upload" hidden>取消上传</button>
+<details id="record-options"><summary>使用麦克风录音</summary><div class="actions"><button id="record-start" class="primary">开始录音</button><button id="record-stop" disabled>停止录音</button></div><p id="record-status" role="status">未开始录音</p><audio id="record-playback" class="audio-player" controls hidden></audio><div class="actions"><button id="save-recording" hidden>保存完整录音</button><button id="record-again" hidden>重新录制</button><button id="discard-recording" hidden>放弃未保存录音</button></div><p class="muted">停止后先回放与保存，再转写。</p></details>
+<div id="audio-info"></div><div class="actions"><button id="transcribe" class="primary" disabled>转写录音</button><button id="delete-audio" class="danger" disabled>删除原音频</button></div><div id="jobs" aria-live="polite"></div>
+<details id="classroom-history"><summary>历史录音与版本</summary><label>录音<select id="audio-history"></select></label><button id="restore-audio">切换录音</button><label>转写版本<select id="transcript-history"></select></label><button id="restore-transcript">恢复转写版本</button><label>报告与人工修订<select id="report-history"></select></label><button id="restore-report">恢复报告版本</button><p class="muted">切换前保存当前修改。旧录音仍保留时可以回放；删除后只保留文字。</p></details>
+<button id="clear-classroom" class="danger quiet">清空当前课堂记录</button></aside>
+<section class="panel audio-review"><div class="panel-heading"><h2>整体复盘</h2><div class="actions"><button id="analyze" class="primary" disabled>生成总结与建议</button><button id="export-report" disabled>导出报告</button></div></div><p id="report-meta" role="status" class="muted">完成转写后，生成一份整课总结与重点建议。</p><div id="report"></div><button id="confirm-report" hidden>确认整份报告</button>
+<details id="transcript-full"><summary>完整转写汇总</summary><p id="transcript-full-meta" class="muted"></p><div class="transcript-full-tools"><label>文字版本<select id="transcript-full-source"><option value="current">当前校正版 / 当前转写</option><option value="original">识别原稿</option></select></label><label><input type="checkbox" id="transcript-full-times">显示片段时间</label><button id="export-transcript" disabled>导出完整转写 TXT</button></div><p class="muted">全文覆盖整段录音，不受分页或搜索限制。排除的误识别单独标记并保留；导出前保存校正。</p><textarea id="transcript-full-text" readonly rows="18" aria-label="完整转写全文"></textarea></details>
+<details id="transcript-panel"><summary>查看转写与校正</summary><p id="transcript-meta" class="muted"></p><div class="transcript-tools"><input id="transcript-search" type="search" placeholder="搜索术语或原文" aria-label="搜索转写"><input id="transcript-time" placeholder="跳至时间，如12:30" aria-label="转写时间"><button id="jump-transcript">定位</button></div><div class="actions transcript-navigation"><button id="transcript-prev">上一组</button><span id="transcript-page-meta"></span><button id="transcript-next">下一组</button></div><details><summary>查看识别原稿</summary><div id="original-transcript"></div></details><div id="transcript"></div><div class="actions"><button id="save-transcript" disabled>保存文字校正版</button><button id="simplify-transcript" disabled>统一为简体</button></div><p id="text-stats" class="muted"></p></details>
+<details id="detail-options"><summary>按需细分分析</summary><label>分析内容<select id="detail-section"><option value="knowledge">核心知识点</option><option value="emphasis">教学重点</option><option value="difficulties">潜在难点</option><option value="observations">提问、重复讲解与时间节奏</option></select></label><label>具体要求（可选）<textarea id="detail-request" rows="2" maxlength="1000" placeholder="例如：有哪些重复讲解可以缩短？"></textarea></label><button id="analyze-details" disabled>生成细分分析</button><p class="muted">只补充选中的内容，保留整体总结与教师修订。</p></details>
+<details id="classroom-discussion"><summary>讨论或调整这份复盘</summary><div id="classroom-messages" aria-live="polite"></div><label>你的问题或修改要求<textarea id="classroom-request" rows="3" maxlength="2000" placeholder="例如：为什么建议缩短开场？或：把第二条建议改得具体一些。"></textarea></label><div class="actions"><button id="classroom-send">发送</button><button id="clear-classroom-conversation" class="quiet">清空讨论上下文</button></div></details>
+</section></main>
+<div id="player-dock" hidden><div><strong id="playback-label">课堂录音</strong><button id="play-full">播放整段</button></div><audio id="audio-player" class="audio-player" controls hidden></audio></div>
+<script type="module" src="./sprint2.js"></script></body></html>

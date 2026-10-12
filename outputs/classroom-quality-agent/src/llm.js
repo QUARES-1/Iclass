@@ -9,12 +9,16 @@ import { analyzeMaterials } from './analyzer.js';
 // 允许的幻灯片环节（与前端展示、导出模块保持一致）。
 const SECTIONS = ['导入', '讲解', '案例', '互动', '总结'];
 
+export const SLIDE_LENGTH_GUIDANCE = '课件篇幅：用讲清目标所需的精简页数，不按课时或批次额度凑页。每页承载一个完整教学单元，相关定义、条件、操作步骤和简短示例尽量合并；普通讲解页通常有3～5条实质要点，或一幅图表、一段完整代码配必要说明，不机械凑条数。除封面、章节过渡及必要互动外，避免一句话、一个术语或一个零碎步骤单独一页；合并重复铺垫、总结与续页。不为压页数堆满文字或缩小字号，代码仍优先按完整函数或完整部分分页。';
+export const SLIDE_TITLE_GUIDANCE = '除教师指定固定标题外，每页标题命名本页具体知识点、函数或操作环节，简短且有区分度；章节名称只用于章节引入，不在一章所有页面反复用作大标题。不要添加“（续2）”“（代码2/3）”等标题标记。跨批次核对已有页面目录，不重复生成已经讲清的章节、同一验证与完整程序。';
+
 // 从 presentations skill 提炼的写作规范，注入系统提示，避免“AI 味”和空泛表达。
 const WRITING_RULES = [
   '标题直接命名本页主题，不使用“从X到Y”“开始讲X”等叙事式或口号式标题，不写无信息量的空泛标题。',
   '正文要点要具体、可落地，避免空话和 AI 味（如“赋能”“闭环”“价值最大化”等），能用事实、步骤、例子就说清楚。',
   '不要出现“本页将介绍”“下面我们来看”等讲解旁白，也不要写对制作 PPT 的自我说明。',
-  '每页聚焦一个主题，要点 3~6 条，每条一句话，避免重复和堆砌。',
+  SLIDE_LENGTH_GUIDANCE,
+  SLIDE_TITLE_GUIDANCE,
   '讲解页标注重点/难点，并给出可执行的讲解建议；案例页给出真实可查的行业应用；互动页给出能引发思考的提问。',
   'notes 写给授课教师，说明讲解思路、来源或需核验之处，不直接当正文展示。',
 ].join('\n');
@@ -27,11 +31,11 @@ export function buildSystemPrompt() {
     'JSON 顶层结构为 {"slides":[...]}，每个元素含：',
     '  "section"：只能是 导入/讲解/案例/互动/总结 之一；',
     '  "title"：本页标题（一句直接命名主题的话）；',
-    '  "bullets"：正文要点字符串数组（普通页面 2~4 条，总结页最多 6 条）；',
+    '  "bullets"：正文要点字符串数组（普通讲解页通常 3~5 条，图表或代码页按需减少，总结页最多 6 条）；',
     '  "notes"：给教师的讲解备注字符串数组（可为空数组）；',
     '  "example"：概念或定义页的具体正例，其他页面可为空字符串；',
     '  "counterExample"：概念边界的反例或常见误解纠正，其他页面可为空字符串。',
-    '整体按“导入 → 讲解 → 案例 → 互动 → 总结”组织；讲解环节为每个知识点各出一页。',
+    '整体按“导入 → 讲解 → 案例 → 互动 → 总结”组织；讲解环节按完整教学主题分组，相关知识点可以放在同一页。',
     '概念、定义和原理类讲解页必须根据教学内容生成一个简短具体的 example，并尽量生成 counterExample；不要只写“可补充示例”。',
     '互动页只生成一个主问题和 2~3 条思考提示，不生成“课堂记录”相关内容。',
     '总结内容优先集中在一页，用不超过 6 条短句归纳核心要点。',
@@ -59,17 +63,44 @@ export function buildUserPrompt(analysis, supplements) {
 
 // 从大模型文本中稳健提取 JSON（容忍偶发的 Markdown 代码块或前后说明）。
 export function extractJson(text) {
-  const cleaned = String(text || '').trim();
-  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (typeof text !== 'string') return null;
+  const cleaned = text.trim();
+  const parse = value => {
+    try {
+      const result = JSON.parse(value);
+      return result && typeof result === 'object' && !Array.isArray(result) ? result : null;
+    } catch { return null; }
+  };
+  // Parse the response before inspecting Markdown: fences inside a JSON string
+  // are teaching content, not wrappers around the response.
+  const direct = parse(cleaned);
+  if (direct) return direct;
+  if (cleaned.startsWith('[')) return null;
+  const fence = cleaned.match(/^```(?:json)?[ \t]*(?:\r?\n|(?=\{))([\s\S]*?)\s*```$/i);
+  if (cleaned.startsWith('```') && !fence) return null;
   const candidate = fence ? fence[1].trim() : cleaned;
+  if (candidate.startsWith('[')) return null;
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
   if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(candidate.slice(start, end + 1));
-  } catch {
-    return null;
+  const prefix = candidate.slice(0, start);
+  if (prefix.includes('```') && !/```(?:json)?\s*$/i.test(prefix)) return null;
+  const object = candidate.slice(start, end + 1);
+  const parsed = parse(object);
+  if (parsed) return parsed;
+  // Some providers emit literal line breaks inside code.source. Escape only
+  // control characters within strings; never invent fields or close a fragment.
+  let quoted = false, escaped = false, normalized = '';
+  for (const char of object) {
+    if (quoted && !escaped && char.charCodeAt(0) < 32) {
+      normalized += JSON.stringify(char).slice(1, -1); continue;
+    }
+    normalized += char;
+    if (escaped) escaped = false;
+    else if (quoted && char === '\\') escaped = true;
+    else if (char === '"') quoted = !quoted;
   }
+  return parse(normalized);
 }
 
 // 内容理解提示：要求模型根据资料语义归纳，而不是依赖“教学重点”等固定标题。
@@ -95,9 +126,11 @@ export function buildAnalysisSystemPrompt() {
 function truncateMaterialContent(value, maxLength) {
   const text = String(value || '').trim();
   if (text.length <= maxLength) return text;
-  const headLength = Math.floor(maxLength * 0.7);
-  const tailLength = maxLength - headLength;
-  return text.slice(0, headLength) + '\n[中间内容因长度限制省略]\n' + text.slice(-tailLength);
+  const marker='\n[中间内容因长度限制省略]\n';
+  if(maxLength<=marker.length)return text.slice(0,maxLength);
+  const headLength = Math.floor((maxLength-marker.length) * 0.7);
+  const tailLength = maxLength-marker.length - headLength;
+  return text.slice(0, headLength) + marker + (tailLength?text.slice(-tailLength):'');
 }
 
 export function buildAnalysisUserPrompt(materials = []) {
@@ -120,50 +153,55 @@ function normalizeStringArray(value, maxItems) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value
     .filter((item) => typeof item === 'string' || typeof item === 'number')
-    .map((item) => String(item).replace(/\s+/g, ' ').trim())
+    .map((item) => {const text=String(item).replace(/\s+/g, ' ').trim();return text.length>5000?text.slice(0,4970)+'…（原句较长，已缩略）':text;})
     .filter(Boolean))]
     .slice(0, maxItems);
 }
 
-export function normalizeAnalysis(raw) {
+export function normalizeAnalysis(raw, { limitItems = true } = {}) {
   const value = raw && raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : raw;
   if (!value || typeof value !== 'object') return null;
   const analysis = {
-    chapters: normalizeStringArray(value.chapters || value.chapter || value['章节'], 10),
-    objectives: normalizeStringArray(value.objectives || value.learningObjectives || value['教学目标'], 8),
+    chapters: normalizeStringArray(value.chapters || value.chapter || value['章节'], limitItems ? 10 : Infinity),
+    objectives: normalizeStringArray(value.objectives || value.learningObjectives || value['教学目标'], limitItems ? 8 : Infinity),
     knowledgePoints: normalizeStringArray(
       value.knowledgePoints || value.knowledge_points || value.knowledge || value['知识点'],
-      20,
+      limitItems ? 20 : Infinity,
     ),
     keyPoints: normalizeStringArray(
       value.keyPoints || value.key_points || value.teachingFocus || value['教学重点'] || value['重点'],
-      8,
+      limitItems ? 8 : Infinity,
     ),
     difficultPoints: normalizeStringArray(
       value.difficultPoints || value.difficult_points || value.teachingDifficulties || value['教学难点'] || value['难点'],
-      8,
+      limitItems ? 8 : Infinity,
     ),
   };
   return Object.values(analysis).some((items) => items.length) ? analysis : null;
 }
 
-// 使用后端环境变量中的同一套 DeepSeek/OpenAI 兼容配置执行内容理解。
+// 使用服务端教师配置执行内容理解；没有配置对象的旧调用仍兼容环境变量。
 // API 不可用时返回现有规则解析结果，保证上传与后续流程仍可继续。
 export async function analyzeMaterialsWithLLM(materials = [], trustedConfig = {}) {
-  const fallback = analyzeMaterials(materials);
-  const apiKey = trustedConfig.apiKey || env('LLM_API_KEY');
-  if (!apiKey) return { source: 'local', analysis: fallback };
+  const rawFallback=analyzeMaterials(materials), fallback=normalizeAnalysis(rawFallback)||rawFallback;
+  const fallbackWarning=Object.keys(rawFallback).some(k=>JSON.stringify(rawFallback[k])!==JSON.stringify(fallback[k]))?'本地理解中的长条目或过多条目已缩略；完整解析资料仍保留，请核对原文。':'';
+  const inputWarning=!trustedConfig.maxInputChars && (materials.some(m=>m.content?.length>50000)||materials.reduce((n,m)=>n+(m.content?.length||0),0)>100000)?'AI 理解单份最多选取 50000、合计 100000 字符，超出正文未交给 AI；完整资料仍保留，请精简或选用所需章节。':'';
+  const apiKey = trustedConfig.apiKey ?? env('LLM_API_KEY');
+  if (!apiKey) return { source: 'local', analysis: fallback, ...(fallbackWarning?{warning:fallbackWarning}:{}) };
 
   const baseUrl = (trustedConfig.baseUrl || env('LLM_BASE_URL') || 'https://api.deepseek.com').replace(/\/+$/, '');
   const model = trustedConfig.model || env('LLM_MODEL') || 'deepseek-chat';
   const configuredTimeout = Number(trustedConfig.timeoutMs || env('LLM_TIMEOUT_MS'));
   const timeoutMs = Number.isFinite(configuredTimeout)
-    ? Math.min(Math.max(configuredTimeout, 5000), 120000)
+    ? Math.min(Math.max(configuredTimeout, 5000), 600000)
     : 45000;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const system = (trustedConfig.prompts?.materials ?? buildAnalysisSystemPrompt()) + '\n应用数据协议：仅返回 JSON {analysis:{chapters:[],objectives:[],knowledgePoints:[],keyPoints:[],difficultPoints:[]}}，数组条目为字符串。';
+    const user = trustedConfig.maxInputChars ? ['请分析以下教学资料：', ...materials.map((item, index) => `\n### 资料 ${index + 1}：${item.title}（${item.type || '教学资料'}）\n${item.content}`)].join('\n') : buildAnalysisUserPrompt(materials);
+    if (trustedConfig.maxInputChars && system.length + user.length > trustedConfig.maxInputChars) throw new Error('资料理解输入超过设置中的字符额度，未向模型发送截断资料；请调整输入额度或分章节理解。');
     const resp = await fetch(baseUrl + '/chat/completions', {
       method: 'POST',
       signal: controller.signal,
@@ -173,32 +211,33 @@ export async function analyzeMaterialsWithLLM(materials = [], trustedConfig = {}
       },
       body: JSON.stringify({
         model,
-        temperature: 0.1,
+        temperature: trustedConfig.temperature ?? 0.1,
         response_format: { type: 'json_object' },
-        max_tokens: 3000,
+        max_tokens: trustedConfig.maxTokens ?? 3000,
         messages: [
-          { role: 'system', content: buildAnalysisSystemPrompt() },
-          { role: 'user', content: buildAnalysisUserPrompt(materials) },
+          { role: 'system', content: system },
+          { role: 'user', content: user },
         ],
       }),
     });
     if (!resp.ok) throw new Error('LLM 请求失败（HTTP ' + resp.status + '）');
 
     const data = await resp.json();
+    if (data.choices?.[0]?.finish_reason === 'length') throw new Error('模型达到设置中的最大输出 token 额度，未采用不完整输出。请调整输出额度或分章节处理。');
     const content = data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content
       : '';
-    const analysis = normalizeAnalysis(extractJson(content));
+    const analysis = normalizeAnalysis(extractJson(content), { limitItems: !trustedConfig.prompts?.materials });
     if (!analysis) throw new Error('LLM 未返回有效的内容理解结果');
     if (!analysis.knowledgePoints.length || !analysis.keyPoints.length || !analysis.difficultPoints.length) {
       throw new Error('LLM 返回的知识点、重点或难点不完整');
     }
-    return { source: 'llm', analysis };
+    return { source: 'llm', analysis, ...(inputWarning?{warning:inputWarning}:{}) };
   } catch (error) {
     const warning = error && error.name === 'AbortError'
       ? 'AI 内容理解请求超时，已改用本地规则解析'
       : (error && error.message ? error.message : String(error));
-    return { source: 'local', analysis: fallback, warning };
+    return { source: 'local', analysis: fallback, warning:[warning,fallbackWarning].filter(Boolean).join('；') };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -236,11 +275,11 @@ function env(name) {
   return typeof process !== 'undefined' && process.env ? process.env[name] : undefined;
 }
 
-// 调用大模型生成大纲；应用运行时的连接信息只允许来自后端环境变量。
+// 调用大模型生成大纲；应用运行时使用服务端已验证的教师配置。
 // trustedConfig 仅用于服务器内部调用或单元测试，绝不能直接传入 HTTP 请求数据。
 // 无 Key 或调用失败时回退本地模板，保证主流程不中断。
 export async function generateOutlineWithLLM(analysis, supplements = [], trustedConfig = {}) {
-  const apiKey = trustedConfig.apiKey || env('LLM_API_KEY');
+  const apiKey = trustedConfig.apiKey ?? env('LLM_API_KEY');
   if (!apiKey) {
     return { source: 'local', slides: generateOutline(analysis, supplements) };
   }
@@ -249,12 +288,15 @@ export async function generateOutlineWithLLM(analysis, supplements = [], trusted
   const model = trustedConfig.model || env('LLM_MODEL') || 'deepseek-chat';
   const configuredTimeout = Number(trustedConfig.timeoutMs || env('LLM_TIMEOUT_MS'));
   const timeoutMs = Number.isFinite(configuredTimeout)
-    ? Math.min(Math.max(configuredTimeout, 5000), 120000)
+    ? Math.min(Math.max(configuredTimeout, 5000), 600000)
     : 45000;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const system = (trustedConfig.prompts?.outline ?? buildSystemPrompt()) + '\n应用数据协议：仅返回 JSON {slides:[{section,title,bullets:[],notes:[],example,counterExample}]}。';
+    const user = buildUserPrompt(analysis, supplements);
+    if (trustedConfig.maxInputChars && system.length + user.length > trustedConfig.maxInputChars) throw new Error('大纲输入超过设置中的字符额度，请调整输入额度或分章节生成。');
     const resp = await fetch(baseUrl + '/chat/completions', {
       method: 'POST',
       signal: controller.signal,
@@ -264,10 +306,11 @@ export async function generateOutlineWithLLM(analysis, supplements = [], trusted
       },
       body: JSON.stringify({
         model,
-        temperature: 0.3,
+        temperature: trustedConfig.temperature ?? 0.3,
+        ...(trustedConfig.maxTokens ? { max_tokens: trustedConfig.maxTokens } : {}),
         messages: [
-          { role: 'system', content: buildSystemPrompt() },
-          { role: 'user', content: buildUserPrompt(analysis, supplements) },
+          { role: 'system', content: system },
+          { role: 'user', content: user },
         ],
       }),
     });
@@ -277,6 +320,7 @@ export async function generateOutlineWithLLM(analysis, supplements = [], trusted
     }
 
     const data = await resp.json();
+    if (data.choices?.[0]?.finish_reason === 'length') throw new Error('模型达到设置中的最大输出 token 额度，未采用不完整输出。请调整输出额度或分章节处理。');
     const content = data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content
       : '';

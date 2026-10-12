@@ -27,7 +27,11 @@ export function confirmAllSlides(slides) {
 
 // 更新单张幻灯片的内容（标题或正文要点）。
 export function updateSlide(slides, slideId, patch = {}) {
-  return slides.map((slide) => (slide.id === slideId ? { ...slide, ...patch } : slide));
+  return slides.map((slide) => {
+    if (slide.id !== slideId) return slide;
+    const changed = Object.keys(patch).some(key => key !== 'status' && JSON.stringify(slide[key]) !== JSON.stringify(patch[key]));
+    return { ...slide, ...patch, ...(changed ? { status: 'pending' } : {}) };
+  });
 }
 
 // 统计审核进度，返回已确认/待确认/已删除的数量。
@@ -42,7 +46,7 @@ export function summarizeReview(slides) {
 // 判断当前 PPT 是否已满足“人工审核完成”的验收标准：
 // 所有未删除的幻灯片都必须已被教师确认。
 export function isReviewComplete(slides) {
-  return slides.every((slide) => slide.status === SLIDE_STATUS.DELETED || slide.status === SLIDE_STATUS.CONFIRMED);
+  return slides.some(s => s.status !== SLIDE_STATUS.DELETED) && slides.every((slide) => slide.status === SLIDE_STATUS.DELETED || slide.status === SLIDE_STATUS.CONFIRMED);
 }
 
 // 过滤出尚未确认的幻灯片，用于在界面上给出“不可用于正式授课”的提示。

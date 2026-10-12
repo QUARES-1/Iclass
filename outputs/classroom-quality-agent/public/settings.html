@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>模型与提示词设置 · 爱教学</title><link rel="stylesheet" href="./workbench.css"><link rel="stylesheet" href="./settings.css"><link rel="stylesheet" href="./calm.css"></head>
+<body><header><a class="brand" href="./home.html">爱教学 <span>模型与提示词设置</span></a><nav><a href="./index.html">备课工作台</a><a href="./sprint2.html">课堂复盘</a><span id="save-status" role="status">正在读取配置…</span></nav></header>
+<div id="notice" role="alert" hidden></div>
+<main class="settings-layout"><form id="model-form" class="panel">
+<h1>模型与提示词设置</h1><p class="muted">保存后用于下一次 AI 请求，无需重启。正在进行的请求使用发起时的配置；已有课件、课堂数据和历史版本保留。</p>
+<fieldset id="settings-fields" disabled><legend>模型连接</legend>
+<div class="actions settings-actions"><button id="save-model" class="primary" type="submit">保存并生效</button><button id="test-model" type="button">测试当前连接</button><button id="reload-model" type="button">重新载入已保存配置</button></div>
+<p id="test-result" role="status" class="muted">测试使用当前表单配置，会发起一次简短的模型请求；不会自动保存。</p>
+
+<label>API 基础地址<input id="base-url" type="url" required maxlength="2048" placeholder="https://api.example.com/v1"><small>使用 Chat Completions 兼容接口。填写服务商基础地址，可包含 /v1；完整 /chat/completions 地址也会自动识别。</small></label>
+<label>模型名称<input id="model" required maxlength="200" placeholder="填写服务商提供的模型 ID"></label>
+<label>API Key<input id="api-key" type="password" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="留空保留已有密钥"><small id="key-status">正在读取密钥状态…</small></label>
+<div class="actions"><button id="show-key" type="button">显示本次输入</button><label class="inline-check"><input id="clear-key" type="checkbox">清除已有密钥</label></div>
+<p class="muted">密钥只保存在本机服务端，不回显已保存的值，不进入课件或报告导出。</p>
+<div class="settings-grid"><label>最大输出 token<input id="max-tokens" type="number" min="1" max="1000000" step="1" required><small>这是单次输出额度，须符合服务商和模型限制；页数由教学要求与提示词决定。</small></label>
+<label>温度<input id="temperature" type="number" min="0" max="2" step="0.1" required><small>较低数值通常使输出更稳定，服务商须支持此参数。</small></label>
+<label>请求超时（秒）<input id="timeout-seconds" type="number" min="5" max="600" step="1" required></label>
+<label>最大输入字符数<input id="max-input-chars" type="number" min="1000" max="2000000" step="1" required><small>包括资料、当前资源和对话；字符数不等于 token 数，实际上下文仍受模型限制。</small></label></div>
+<h2>智能体运行</h2><p class="muted">长课件自动分批生成，超限会缩小批次；任务可暂停、恢复。以下额度用于控制单个任务的运行开销。</p><div class="settings-grid"><label>每批逻辑页面数<input id="batch-pages" type="number" min="1" max="6" step="1" required></label><label>每任务最大模型调用次数<input id="max-agent-calls" type="number" min="1" max="500" step="1" required></label><label>最多计划步骤<input id="max-plan-steps" type="number" min="1" max="300" step="1" required></label><label>自动修正轮次<input id="max-repairs" type="number" min="0" max="5" step="1" required></label></div>
+<h2>程序提示词</h2><p class="muted">按需展开和编辑。保存后生效，每份最多 30000 字符。</p>
+<details class="prompt-section" id="prompt-group-agent" open><summary>对话、工具与自主执行</summary><label>智能体工作方式<textarea id="prompt-agent" rows="9" required maxlength="30000" spellcheck="false"></textarea></label><button type="button" data-reset="agent">恢复智能体默认值</button></details>
+<details class="prompt-section" id="prompt-group-preparation" open><summary>备课内容与教学风格</summary><label>生成与修改课件、小游戏、网页<textarea id="prompt-preparation" rows="10" required maxlength="30000" spellcheck="false"></textarea></label><button type="button" data-reset="preparation">恢复备课提示词默认值</button><details><summary>输出结构协议（只读）</summary><pre id="contract-preparation"></pre></details></details>
+<details class="prompt-section" id="prompt-group-materials"><summary>资料理解</summary><label>资料理解提示词<textarea id="prompt-materials" rows="10" required maxlength="30000" spellcheck="false"></textarea></label><button type="button" data-reset="materials">恢复资料理解默认值</button></details>
+<details class="prompt-section" id="prompt-group-classroom"><summary>课堂复盘</summary><label>课堂复盘提示词<textarea id="prompt-classroom" rows="10" required maxlength="30000" spellcheck="false"></textarea></label><button type="button" data-reset="classroom">恢复课堂复盘默认值</button><details><summary>输出结构协议（只读）</summary><pre id="contract-classroom"></pre></details></details>
+<details class="prompt-section"><summary>兼容旧版 PPT 大纲接口</summary><label>旧版大纲提示词<textarea id="prompt-outline" rows="10" required maxlength="30000" spellcheck="false"></textarea></label><button type="button" data-reset="outline">恢复旧版大纲默认值</button></details>
+</fieldset></form></main><script type="module" src="./settings.js"></script></body></html>

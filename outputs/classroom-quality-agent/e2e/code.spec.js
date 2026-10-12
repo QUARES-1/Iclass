@@ -1,0 +1,46 @@
+import {test,expect} from '@playwright/test';
+import fs from 'node:fs/promises';
+import {codeFixture,functionBodies} from '../test-support/codeFixture.js';
+test('示例代码分页预览、完整复制、人工编辑、刷新与正式PPTX导出一致',async({page,request})=>{
+  const state=await(await request.get('/api/workspace')).json();await request.post('/api/workspace',{data:{revision:state.revision,action:'clear'}});
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedSource=text;}}}));
+  await page.goto('/public/index.html');await expect(page.locator('#send')).toBeEnabled();
+  await page.locator('#request').fill('新建代码展示验证课件，提供示例代码');await page.locator('#send').click();await expect(page.locator('#agent-stage')).toHaveText('执行完成');
+  await page.getByRole('button',{name:'复制完整代码',exact:true}).first().click();expect(await page.evaluate(()=>window.copiedSource)).toBe(codeFixture);
+  expect(await page.locator('.code-block code').first().textContent()).toContain('    // 讲解步骤');
+  const displayed=await page.locator('.code-block code').allTextContents();for(const body of functionBodies)expect(displayed.some(text=>text.includes(body))).toBe(true);
+  const rendered=await page.locator('.slide-card').evaluateAll(cards=>cards.filter(c=>c.querySelector('.code-block code')).map(c=>({source:c.querySelector('.code-block code').textContent,editor:c.querySelector('[data-field=codeSource]').value})));
+  for(const item of rendered)expect(item.editor).toBe(item.source);
+  const first=page.locator('.slide-card').first();await first.locator('.slide-edit summary').click();
+  const source=await first.locator('[data-field=codeSource]').inputValue();await first.locator('[data-field=codeSource]').fill('// 教师修改\n'+source);await first.locator('[data-save-slide]').click();
+  await page.reload();await expect(page.getByRole('button',{name:'复制完整代码',exact:true}).first()).toBeVisible();await page.getByRole('button',{name:'复制完整代码',exact:true}).first().click();expect(await page.evaluate(()=>window.copiedSource)).toBe('// 教师修改\n'+codeFixture);
+  await page.locator('.resource-more summary').click();await page.locator('#reflow-code').click();await expect(page.locator('#notice')).toContainText('完整函数');
+  await page.getByRole('button',{name:'复制完整代码',exact:true}).first().click();expect(await page.evaluate(()=>window.copiedSource)).toBe('// 教师修改\n'+codeFixture);
+  await page.setViewportSize({width:390,height:844});await page.locator('button[data-tab=preview]').click();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.setViewportSize({width:1440,height:1000});await page.locator('#btn-confirm-all').click();
+  const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#export-final').click()]);await fs.mkdir('artifacts/code-lesson',{recursive:true});await download.saveAs('artifacts/code-lesson/browser-code.pptx');
+  const exported=await page.evaluate(async ({bytes,bodies})=>{const zip=await JSZip.loadAsync(new Uint8Array(bytes));const names=Object.keys(zip.files).filter(n=>/^ppt\/slides\/slide\d+\.xml$/.test(n));const xmlPages=await Promise.all(names.map(n=>zip.file(n).async('string'))),xml=xmlPages.join('\n'),texts=xmlPages.map(xml=>Array.from(new DOMParser().parseFromString(xml,'text/xml').getElementsByTagName('a:t')).map(n=>n.textContent).join('\n'));return {pages:names.length,mono:xml.includes('Consolas'),songti:xml.includes('SimSun')&&!xml.includes('Microsoft YaHei'),indent:xml.includes('    //'),operators:xml.includes('x &lt; 3'),teacherEdit:xml.includes('教师修改'),wholeFunctions:bodies.every(body=>texts.some(text=>text.includes(body.trimEnd())))};},{bytes:[...await fs.readFile('artifacts/code-lesson/browser-code.pptx')],bodies:functionBodies});
+  const current=await(await request.get('/api/workspace')).json(),r=current.resources[0],v=r.versions.find(v=>v.id===r.currentVersionId);
+  expect(exported.pages).toBe(v.content.slides.length);expect(exported.mono).toBe(true);expect(exported.songti).toBe(true);expect(exported.indent).toBe(true);expect(exported.operators).toBe(true);expect(exported.teacherEdit).toBe(true);expect(exported.wholeFunctions).toBe(true);expect(errors).toEqual([]);
+});
+
+test('Windows换行源码在确认、只改备注和代码语言后保持完整，刷新与复制一致',async({page,request})=>{
+  let state=await(await request.get('/api/workspace')).json();await request.post('/api/workspace',{data:{revision:state.revision,action:'clear'}});
+  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedSource=text;}}}));
+  await page.goto('/public/index.html');await page.locator('#request').fill('新建代码展示验证课件');await page.locator('#send').click();await expect(page.locator('#agent-stage')).toHaveText('执行完成');
+  state=await(await request.get('/api/workspace')).json();let r=state.resources[0],v=r.versions.find(v=>v.id===r.currentVersionId);
+  const first=v.content.slides.find(s=>s.code&&s.code.kind!=='output'),source='\r\nint main() {\r\n    return 0;\r\n}\r\n';
+  const result=await request.post('/api/workspace',{data:{revision:state.revision,action:'editSlide',resourceId:r.id,baseVersionId:v.id,slideId:first.id,patch:{code:{...first.code,source,replaceBlock:true}}}});expect(result.ok()).toBe(true);
+  state=await result.json();r=state.resources[0];const count=r.versions.length;
+  await page.reload();await page.locator('#btn-confirm-all').click();await expect(page.locator('#resource-meta')).toContainText('已确认');
+  state=await(await request.get('/api/workspace')).json();r=state.resources[0];expect(r.versions.length).toBe(count);
+  const card=page.locator('.slide-card').filter({has:page.locator('[data-field=codeSource]')}).filter({has:page.locator('.code-block')}).first();await card.locator('.slide-edit summary').click();
+  expect(await card.locator('[data-field=codeSource]').inputValue()).toBe(source.replaceAll('\r\n','\n'));
+  await card.locator('[data-field=notes]').fill('只改教师备注');await card.locator('[data-save-slide]').click();
+  await expect(page.locator('#resource-meta')).toContainText('待确认');
+  await page.reload();await page.getByRole('button',{name:'复制完整代码',exact:true}).first().click();expect(await page.evaluate(()=>window.copiedSource)).toBe(source);
+  const refreshed=page.locator('.slide-card').filter({has:page.locator('.code-block')}).first();await refreshed.locator('.slide-edit summary').click();await refreshed.locator('[data-field=codeLanguage]').fill('c++');await refreshed.locator('[data-save-slide]').click();
+  await expect.poll(async()=>{const s=await(await request.get('/api/workspace')).json(),resource=s.resources[0];return resource.versions.find(v=>v.id===resource.currentVersionId).content.slides.find(p=>p.code&&p.code.kind!=='output').code.language;}).toBe('c++');
+  await page.reload();await page.getByRole('button',{name:'复制完整代码',exact:true}).first().click();expect(await page.evaluate(()=>window.copiedSource)).toBe(source);
+});

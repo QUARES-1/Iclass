@@ -6,6 +6,7 @@ import {
   extractUploadedFile,
   FileParseError,
   MAX_UPLOAD_BYTES,
+  MAX_EXTRACTED_CHARACTERS,
 } from '../src/fileParser.js';
 import { createStoredZip, slideXml } from '../test-support/zipFixture.js';
 
@@ -66,4 +67,40 @@ test('旧版 PPT 与不支持的类型返回明确错误', async () => {
     extractUploadedFile(Buffer.from('data'), 'material.pdf'),
     (error) => error.statusCode === 415 && error.code === 'UNSUPPORTED_FILE_TYPE',
   );
+});
+
+test('UTF-8 TXT/MD 与 DOCX 正文解析，损坏和无正文返回明确错误',async()=>{
+  assert.equal((await extractUploadedFile(Buffer.from('教学重点：排序'),'lesson.txt')).content,'教学重点：排序');
+  assert.equal((await extractUploadedFile(Buffer.from('# 算法'),'lesson.md')).type,'md');
+  const docx=createStoredZip({'word/document.xml':'<w:document><w:p><w:r><w:t>A &amp; B</w:t></w:r></w:p><w:p><w:r><w:t>稳定排序</w:t></w:r></w:p></w:document>'});
+  assert.equal((await extractUploadedFile(docx,'lesson.docx')).content,'A & B\n稳定排序');
+  await assert.rejects(()=>extractUploadedFile(createStoredZip({'no-document':'x'}),'broken.docx'),/正文不存在/);
+  await assert.rejects(()=>extractUploadedFile(Buffer.from([0xff,0xfe]),'broken.txt'),/UTF-8/);
+});
+
+test('截取后的正文不超过后续接口上限，保留截取元信息',async()=>{
+  const result=await extractUploadedFile(Buffer.from('课'.repeat(MAX_EXTRACTED_CHARACTERS+1)),'long.txt');assert.equal(result.truncated,true);assert.ok(result.content.length<=MAX_EXTRACTED_CHARACTERS);assert.equal(result.originalCharacters,MAX_EXTRACTED_CHARACTERS+1);
+});
+test('截取不会破坏 Unicode，完整原文中的控制字符也会拒绝',async()=>{
+  const value='课'.repeat(MAX_EXTRACTED_CHARACTERS-1)+'😀尾部';
+  const result=await extractUploadedFile(Buffer.from(value),'emoji.TXT');
+  assert.equal(result.content.length,MAX_EXTRACTED_CHARACTERS-1);assert.equal(result.content.isWellFormed(),true);
+  await assert.rejects(()=>extractUploadedFile(Buffer.from('课'.repeat(MAX_EXTRACTED_CHARACTERS+1)+'\0'),'tail.txt'),/控制字符/);
+});
+test('二进制冒充UTF-8文本、空白正文及非法XML字符实体返回解析错误',async()=>{
+  await assert.rejects(()=>extractUploadedFile(Buffer.from('文字\0二进制'),'fake.txt'),error=>error instanceof FileParseError);
+  await assert.rejects(()=>extractUploadedFile(Buffer.from('\uFEFF \n\t'),'empty.md'),/没有有效文本/);
+  await assert.rejects(()=>extractUploadedFile(createStoredZip({'ppt/slides/slide1.xml':slideXml(['&#99999999;'])}),'invalid.pptx'),error=>error instanceof FileParseError);
+});
+test('ZIP 声明尺寸与实际数据不符、正文CRC损坏、加密标记均被拒绝',async()=>{
+  const valid=createStoredZip({'ppt/slides/slide1.xml':slideXml(['中文正文'])}),central=valid.indexOf(Buffer.from([0x50,0x4b,0x01,0x02]));
+  const wrongSize=Buffer.from(valid);wrongSize.writeUInt32LE(1,central+24);await assert.rejects(()=>extractUploadedFile(wrongSize,'wrong.pptx'),error=>error instanceof FileParseError);
+  const corrupt=Buffer.from(valid);corrupt[30+corrupt.readUInt16LE(26)+20]^=1;await assert.rejects(()=>extractUploadedFile(corrupt,'corrupt.pptx'),error=>error instanceof FileParseError);
+  const encrypted=Buffer.from(valid);encrypted.writeUInt16LE(1,central+8);await assert.rejects(()=>extractUploadedFile(encrypted,'encrypted.pptx'),/加密/);
+});
+test('Office 行内换行及制表符保留，避免相邻知识点被粘连',async()=>{
+  const docx=createStoredZip({'word/document.xml':'<w:document><w:p><w:r><w:t>英语</w:t><w:tab/><w:t>English</w:t><w:br/><w:t>下一行</w:t></w:r></w:p></w:document>'});
+  assert.equal((await extractUploadedFile(docx,'lesson.docx')).content,'英语\tEnglish\n下一行');
+  const pptx=createStoredZip({'ppt/slides/slide1.xml':'<a:p><a:r><a:t>第一步</a:t></a:r><a:br/><a:r><a:t>第二步</a:t></a:r></a:p>'});
+  assert.equal((await extractUploadedFile(pptx,'lesson.pptx')).content,'[第1页]\n第一步\n第二步');
 });

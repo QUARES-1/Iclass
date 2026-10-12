@@ -1,49 +1,6 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>爱教学 · 课堂质量改进智能体</title>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="brand">
-        <span class="brand-mark">爱</span>
-        <div>
-          <h1>爱教学 · 课堂质量改进智能体</h1>
-          <p class="subtitle">课前智能备课 · 课中课堂感知 · 课后教学改进（人机协同编码 · 网页版原型）</p>
-        </div>
-      </div>
-      <div class="dod-badge">三个 Sprint · 闭环教学改进</div>
-    </div>
-  </header>
-
-  <main class="content home-content">
-    <p class="home-lead">围绕课前、课中、课后全流程，帮助教师完成备课、课堂理解与持续改进。请选择要进入的功能。</p>
-    <div class="home-grid">
-      <a class="home-card" href="./index.html">
-        <div class="home-card-badge sprint1">Sprint 1</div>
-        <h2>📚 课前智能备课</h2>
-        <p>上传教案、教材、大纲和往年 PPT，AI 提取知识点、补充前沿案例，生成可审核的 PPT 初稿。</p>
-        <span class="home-enter">进入 →</span>
-      </a>
-      <a class="home-card" href="./sprint2.html">
-        <div class="home-card-badge sprint2">Sprint 2</div>
-        <h2>🎥 课中课堂感知</h2>
-        <p>统计整体抬头率、语音转文字、识别语速语调，生成带时间戳的课堂时间轴与课堂记录。</p>
-        <span class="home-enter">进入 →</span>
-      </a>
-      <div class="home-card is-locked">
-        <div class="home-card-badge sprint3">Sprint 3</div>
-        <h2>📝 课后反馈与优化</h2>
-        <p>课后问卷反馈、多源数据整合、课堂复盘与下一节课 PPT 优化（预留，敬请期待）。</p>
-        <span class="home-enter">预留中</span>
-      </div>
-    </div>
-  </main>
-
-  <footer class="app-footer">爱教学项目 · Team11 · 软件项目管理实验 · 人机协同编码</footer>
-</body>
-</html>
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>爱教学 · 教学智能体</title><link rel="stylesheet" href="./workbench.css"><link rel="stylesheet" href="./calm.css"><link rel="stylesheet" href="./home.css"></head>
+<body><header><a class="brand" href="./home.html">爱教学 <span>教学智能体</span></a><nav><a class="settings-link" href="./settings.html">模型与提示词设置</a></nav></header>
+<main class="home-shell"><section class="home-intro"><h1>备课与课堂复盘</h1><p>提供教学目标和资料，由智能体规划、执行与检查。你可以随时调整内容，确认后再用于课堂。</p></section>
+<div class="home-grid"><a class="home-card" href="./index.html"><span class="home-kind">课前准备</span><h2>自主备课</h2><p>按课时规划章节，分批生成课件、案例与实操练习。持续检查和修改，保存每次完成的成果。</p><span class="home-enter">进入备课工作台 →</span></a><a class="home-card" href="./sprint2.html"><span class="home-kind">课后改进</span><h2>课堂音频复盘</h2><p>上传或录制课堂音频，校正真实转写，查看有原文依据的知识梳理与改进建议。</p><span class="home-enter">开始课堂复盘 →</span></a></div>
+<div class="home-config"><span id="home-model" role="status">正在读取模型状态…</span><a href="./settings.html">管理模型连接</a></div></main><footer class="home-footer">本地工作空间 · 教学内容由教师最终确认</footer><script type="module" src="./home.js"></script></body></html>

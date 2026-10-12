@@ -1,0 +1,17 @@
+import fs from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import assert from 'node:assert/strict';
+const root=new URL('..',import.meta.url),file=p=>new URL(p,root),base='http://127.0.0.1:3000';
+const api=async(route,data)=>{const response=await fetch(base+route,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await response.json();if(!response.ok)throw Error(result.error);return result;};
+await fs.mkdir(file('artifacts/code-course'),{recursive:true});await fs.mkdir(file('data/backups'),{recursive:true});
+let state=await api('/api/workspace');const old=structuredClone(state);
+assert.ok(!state.messages.some(m=>m.status==='processing'),'another task is running');
+const target=state.resources.find(r=>r.id===state.selectedId&&r.type==='ppt')||state.resources.find(r=>r.type==='ppt');assert.ok(target);
+const backup='data/backups/workspace-before-code-course-'+Date.now()+'.json';await fs.writeFile(file(backup),JSON.stringify(state,null,2),{mode:0o600});
+const classroomHash=createHash('sha256').update(await fs.readFile(file('data/classroom.json'))).digest('hex');
+const instructions='以原理、数据表示、关键操作和实现代码为主，关注为什么这样设计。示例代码使用C++17，给出必要定义、调用方法与预期输出。每章少量验证输入即可，不要大量例题、逐题手算、代码填空或练习答案；实操以运行和修改代码为主。';
+state=await api('/api/workspace',{revision:state.revision,action:'settings',requirements:{...state.requirements,instructions}});
+const request='重构当前整份300分钟数据结构课件，保留历史版本。主体讲原理、数据表示、关键操作、C++17示例代码和复杂度；删除或替换冗余例题、反例、手算、代码填空与练习讲评，不再按每个知识点出题。同一章只需少量验证代码的输入。按资料组织章节，将概念讲解与代码实现分成不同步骤。代码使用code字段，提供关键函数、必要类型和标准头文件、调用示例与预期输出；重要实现给出可直接编译运行的程序，不用bits/stdc++.h。实操以运行、修改代码为主，不新增题库。说明超纲内容的取舍，不反复扩写。可重写旧AI讲稿和备注；保留教师未要求修改的人工内容。';
+const {job:first}=await api('/api/workspace/agent',{revision:state.revision,resourceId:target.id,baseVersionId:target.currentVersionId,request});
+await fs.writeFile(file('artifacts/code-course/run.json'),JSON.stringify({jobId:first.id,resourceId:target.id,oldVersionId:target.currentVersionId,backup,classroomHash,oldRequirements:old.requirements,request},null,2));
+console.log(JSON.stringify({jobId:first.id,stage:first.stage,oldPages:target.versions.find(v=>v.id===target.currentVersionId).content.slides.length}));

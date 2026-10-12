@@ -1,140 +1,19 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>课堂质量改进智能体 · Sprint 1 课前智能备课</title>
-  <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="brand">
-        <span class="brand-mark">课</span>
-        <div>
-          <h1>课堂质量改进智能体</h1>
-          <p class="subtitle">Sprint 1 · 课前智能备课（人机协同编码 · 网页版原型）</p>
-        </div>
-      </div>
-      <div class="dod-badge" title="DoD：代码能跑 · 有基本测试 · 有代码注释">
-        DoD 达成
-      </div>
-    </div>
-  </header>
-
-  <nav class="stepper" aria-label="实验流程">
-    <button class="step is-active" data-step="1"><span class="step-num">1</span><span>资料上传</span></button>
-    <button class="step" data-step="2"><span class="step-num">2</span><span>内容理解</span></button>
-    <button class="step" data-step="3"><span class="step-num">3</span><span>前沿补充</span></button>
-    <button class="step" data-step="4"><span class="step-num">4</span><span>PPT生成</span></button>
-    <button class="step" data-step="5"><span class="step-num">5</span><span>人工审核</span></button>
-  </nav>
-
-  <main class="content">
-    <!-- 步骤1：资料上传 -->
-    <section class="panel is-active" data-panel="1">
-      <h2>① 上传教学资料</h2>
-      <p class="muted">上传或粘贴历史教案、教学用书、教学大纲和往年 PPT，智能体将据此理解课程背景。</p>
-
-      <div class="toolbar">
-        <button class="btn" id="btn-sample">填入示例资料</button>
-        <label class="btn btn-ghost">
-          上传文件（TXT / MD / DOCX / PPTX）
-          <input type="file" id="file-input" multiple accept=".txt,.md,.text,.markdown,.docx,.pptx,.ppt" hidden />
-        </label>
-        <button class="btn btn-ghost" id="btn-clear">清空</button>
-      </div>
-
-      <div class="file-chips" id="file-chips" hidden></div>
-      <p class="muted" id="file-status" aria-live="polite"></p>
-
-      <div class="material-grid">
-        <label class="field">
-          <span class="field-label">历史教案</span>
-          <textarea id="mat-lesson-plan" rows="7" placeholder="粘贴历史教案内容…"></textarea>
-        </label>
-        <label class="field">
-          <span class="field-label">教学用书</span>
-          <textarea id="mat-textbook" rows="7" placeholder="粘贴教学用书相关章节…"></textarea>
-        </label>
-        <label class="field">
-          <span class="field-label">教学大纲</span>
-          <textarea id="mat-syllabus" rows="7" placeholder="粘贴课程教学大纲…"></textarea>
-        </label>
-        <label class="field">
-          <span class="field-label">往年 PPT</span>
-          <textarea id="mat-past-ppt" rows="7" placeholder="粘贴往年 PPT 大纲或内容…"></textarea>
-        </label>
-      </div>
-
-      <div class="panel-actions">
-        <button class="btn btn-primary" id="btn-analyze">解析资料，开始内容理解 →</button>
-      </div>
-    </section>
-
-    <!-- 步骤2：内容理解 -->
-    <section class="panel" data-panel="2">
-      <h2>② 内容理解（结构化解析）</h2>
-      <p class="muted">智能体已从资料中提取章节、教学目标、知识点、重点与难点。可勾选要纳入 PPT 的知识点。</p>
-      <div id="analysis-result" class="analysis-result"></div>
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <button class="btn btn-primary" id="btn-to-supplement">匹配前沿补充 →</button>
-      </div>
-    </section>
-
-    <!-- 步骤3：前沿补充 -->
-    <section class="panel" data-panel="3">
-      <h2>③ 前沿技术 / 行业案例补充</h2>
-      <p class="muted">围绕课程主题匹配最新技术与行业案例，可勾选要纳入 PPT 的内容。</p>
-      <div id="supplement-result" class="supplement-result"></div>
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <button class="btn btn-primary" id="btn-to-generate">生成 PPT 初稿 →</button>
-      </div>
-    </section>
-
-    <!-- 步骤4：PPT生成 -->
-    <section class="panel" data-panel="4">
-      <h2>④ PPT 大纲与初稿</h2>
-      <p class="muted">按“导入 → 讲解 → 案例 → 互动 → 总结”结构组织 PPT 初稿，可导出为 Markdown。</p>
-      <div class="ai-toolbar">
-        <button class="btn btn-ghost" id="btn-ai-generate">🤖 AI 生成 PPT</button>
-        <span class="ai-status" id="ai-status"></span>
-      </div>
-      <div id="ppt-preview" class="ppt-preview"></div>
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <div class="actions-right">
-          <button class="btn btn-ghost" id="btn-export-md">导出 Markdown</button>
-          <button class="btn btn-ghost" id="btn-export-pptx">下载 PPT（.pptx）</button>
-          <button class="btn btn-primary" id="btn-to-review">进入人工审核 →</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- 步骤5：人工审核 -->
-    <section class="panel" data-panel="5">
-      <h2>⑤ 人工审核与确认</h2>
-      <p class="muted">教师可修改、删除或确认每一页 PPT 内容；未经确认的内容不能直接用于正式授课。</p>
-      <div class="review-summary" id="review-summary"></div>
-      <div id="review-list" class="review-list"></div>
-      <div class="panel-actions between">
-        <button class="btn btn-ghost" data-prev>← 返回</button>
-        <div class="actions-right">
-          <button class="btn btn-primary" id="btn-confirm-all" disabled>全部确认</button>
-          <button class="btn btn-ghost" id="btn-export-final">导出 Markdown 大纲</button>
-          <button class="btn btn-primary" id="btn-export-pptx-final">下载 PPT（.pptx）</button>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="app-footer">
-    课堂质量改进智能体 · 爱教学项目 · Team11 · 软件项目管理实验二（Sprint 1）· 人机协同编码原型
-  </footer>
-
-  <script src="./vendor/pptxgen.bundle.js"></script>
-  <script type="module" src="./main.js"></script>
-</body>
-</html>
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>教学资源工作台 · 课前智能备课</title><link rel="stylesheet" href="./workbench.css"><script src="./vendor/pptxgen.bundle.js"></script><link rel="stylesheet" href="./calm.css"></head>
+<body><header><a class="brand" href="./home.html">爱教学 <span>教学资源工作台</span></a><nav><a href="./settings.html" target="_blank" rel="noopener">模型与提示词设置</a><a href="./sprint2.html">课堂音频复盘 →</a><span id="save-status" role="status">正在恢复…</span></nav></header>
+<div id="notice" role="alert" hidden></div><div class="mobile-tabs"><button data-tab="sources">资料与资源</button><button data-tab="preview">预览与编辑</button><button data-tab="chat">连续对话</button></div>
+<main class="workbench" data-tab="preview">
+<aside class="panel sources" aria-label="资料与资源"><div class="panel-heading"><div><p class="eyebrow">01 / CONTEXT</p><h2>资料与资源</h2></div><button id="sample" class="quiet">载入本地示例</button></div>
+<details open><summary>教学要求</summary><label>课程主题<input id="topic" placeholder="如：排序算法与稳定性"></label><label>授课对象<input id="audience" placeholder="如：本科二年级"></label><label>课时（分钟）<input id="duration" type="number" value="45" min="1"></label><label>其他要求<textarea id="instructions" rows="2" placeholder="例：多用具体案例"></textarea></label><button id="save-settings">保存教学要求</button></details>
+<details open><summary>教学资料 <span id="material-count"></span></summary><label class="file-label">上传 TXT / MD / DOCX / PPTX<input id="files" type="file" multiple accept=".txt,.md,.docx,.pptx"></label><details class="file-requirements"><summary>文件要求与大小限制</summary><p class="muted">单个文件 ≤15 MiB，最多 20 条资料（含失败记录）。TXT/MD 请用 UTF-8；DOCX/PPTX 提取正文文字，不识别扫描图片，不支持加密文档。每份保留最多 25 万字符，合计最多 50 万字符。</p></details><label>粘贴资料<textarea id="material-text" rows="3" placeholder="也可以不上传文件，直接在对话中说明课程需求"></textarea></label><button id="add-text">加入资料</button><button id="cancel-material-upload" hidden>停止本批上传</button><p id="parse-status" class="muted" role="status"></p><p id="context-limit" class="muted" role="status"></p><div id="materials"></div></details>
+<details><summary>知识点与前沿补充</summary><button id="understand">理解资料</button><span id="analysis-source" class="muted"></span><div id="analysis-editor"></div><div id="supplements"></div><button id="save-context">保存知识点与补充选择</button></details>
+<section><h3>资源列表 <span id="resource-count"></span></h3><div class="actions"><button data-new="ppt">新建 PPT</button><button data-new="game">新建小游戏</button><button data-new="web">新建网页</button></div><div id="resources"></div></section><button id="clear-workspace" class="danger quiet">清空当前工作空间</button>
+</aside>
+<section class="panel preview" aria-label="预览与编辑"><div class="panel-heading"><div><p class="eyebrow">02 / RESOURCE</p><h2 id="resource-title">从一个教学想法开始</h2><p id="resource-meta" class="muted">资料、预览和对话都在这里</p></div><button id="delete-resource" class="danger quiet" hidden>删除资源</button></div>
+<div id="resource-tools" hidden><div class="preview-top-actions"><button id="export-draft">导出草稿</button><button id="export-final" class="primary">导出正式稿</button></div><details class="resource-more"><summary>版本与更多导出方式</summary><div class="actions"><button id="undo">撤销最近修改</button><select id="history" aria-label="历史版本"></select><button id="restore">恢复所选版本</button><button id="rename">重命名</button><button id="reflow-code" hidden>按函数整理代码分页</button></div><div class="actions"><button id="export-md">导出 Markdown 草稿</button><button id="export-md-final">导出 Markdown 正式稿</button></div></details></div>
+<div id="empty" class="empty"><div class="empty-symbol">✦</div><h3>备课成果在这里展开</h3><p>在右侧提出明确的课程需求，生成 PPT、小游戏或教学网页。<br>已有内容可以直接编辑，再继续用对话调整。</p><button id="btn-generate-ppt" class="primary">AI 生成 PPT</button><p class="muted">“载入本地示例”可用于试玩与导出，不调用 AI。</p></div>
+<div class="page-navigation" id="page-navigation" hidden><label for="page-jump">定位页面</label><select id="page-jump" aria-label="定位课件页面"></select></div><div id="review-list"></div><div id="ppt-footer" class="actions" hidden><button id="add-slide">增加页面</button><button id="btn-confirm-all" class="primary">确认全部有效页面</button><button id="btn-export-pptx-final">导出正式 PPTX</button></div>
+<div id="activity-panel" hidden><label>名称<input id="activity-title"></label><label>操作说明<textarea id="activity-description" rows="2"></textarea></label><div class="actions"><button id="save-activity">保存基本信息</button><button id="confirm-activity" class="primary">确认当前互动版本</button><button id="reset-preview">重新试玩</button><button id="fullscreen">全屏演示</button><button id="exit-preview">退出预览</button></div><p id="preview-status" role="status" class="muted"></p><div id="frame-host"></div></div>
+</section>
+<aside class="panel chat" aria-label="连续对话"><div class="panel-heading"><div><p class="eyebrow">03 / CONVERSATION</p><h2>一起完善这堂课</h2></div><button id="clear-context" type="button" class="quiet" title="清除历史对话，保留课件、资料和教师设置">清空上下文</button></div><details id="operation-scope"><summary>操作对象与修改范围</summary><p id="operation-target" class="target">操作对象：新资源</p><label>修改范围<select id="scope"><option value="">当前整份资源</option></select></label></details><section id="agent-progress" class="agent-progress" aria-live="polite" hidden><div class="agent-heading"><strong id="agent-stage">正在思考</strong><small id="agent-count"></small></div><p id="agent-detail"></p><progress id="agent-meter" max="1" value="0" aria-label="任务进度"></progress><details><summary>查看执行计划</summary><div id="agent-plan"></div></details><details><summary>查看执行与修正记录</summary><ul id="agent-observations"></ul></details><details id="agent-review" hidden><summary>查看内容检查结果</summary><div id="agent-issues"></div></details><p id="agent-error" hidden></p><div class="actions"><button id="agent-pause" type="button">暂停任务</button><button id="agent-resume" type="button" hidden>继续任务</button><a id="agent-draft" class="draft-link" target="_blank" rel="noopener" hidden>查看任务草稿</a></div></section><div id="messages" aria-live="polite"></div><form id="chat-form"><label for="request">和智能体对话</label><textarea id="request" rows="4" placeholder="可以提问、讨论课程，也可以让我生成或修改课件"></textarea><button id="send" class="primary" type="submit">发送</button></form><p id="model-status" class="muted"></p></aside>
+</main><script type="module" src="./main.js"></script></body></html>
