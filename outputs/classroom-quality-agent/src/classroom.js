@@ -165,6 +165,36 @@ export function buildTimeline(schedule, speechSegments) {
   return events.sort((a, b) => a.t - b.t);
 }
 
+// 生成课堂总结：把语速、语调、提问互动与关键词汇总成一段总评。
+export function buildSummary({ speech, tone, keywords, interaction }) {
+  const s = speech || {};
+  const t = tone || {};
+  const i = interaction || {};
+  const kw = (keywords || []).slice(0, 5).map((k) => k.word);
+
+  const overview = [
+    `语速约 ${s.charsPerMin != null ? s.charsPerMin : '—'} 字/分钟（${s.level || '—'}）`,
+    `平均句长约 ${t.avgSentenceLen != null ? t.avgSentenceLen : '—'} 字`,
+    `停顿/口头语约 ${t.pauses != null ? t.pauses : '—'} 次`,
+    `提问 ${i.questions != null ? i.questions : 0} 次、互动相关词约 ${i.interactionCount != null ? i.interactionCount : 0} 次`,
+  ].join('，');
+
+  let verdict;
+  if (s.level === '偏快') {
+    verdict = '整体语速偏快，建议适当放慢讲解节奏，给学员留出思考和吸收时间。';
+  } else if (s.level === '偏慢') {
+    verdict = '整体语速偏慢，可适当加快节奏、提高信息密度。';
+  } else if ((i.questions || 0) === 0) {
+    verdict = '语速适中，但提问与互动偏少，可适当增加提问、讨论等互动环节。';
+  } else {
+    verdict = '整体节奏与互动处于正常范围，课堂结构较完整，可继续保持。';
+  }
+
+  const focus = kw.length ? `内容重点集中在：${kw.join('、')}。` : '';
+
+  return { overview, focus, verdict, keywords: kw };
+}
+
 // 生成课堂分析报告（Markdown）。
 export function buildClassroomRecord({ meta, speech, tone, keywords, interaction, events }) {
   const lines = ['# 课堂分析报告（Sprint 2 课中课堂感知）', ''];
@@ -199,6 +229,12 @@ export function buildClassroomRecord({ meta, speech, tone, keywords, interaction
     const timeLabel = e.end ? `${formatTime(e.t)}~${formatTime(e.end)}` : formatTime(e.t);
     lines.push(`- **${timeLabel}** [${e.label}] ${e.detail}`);
   }
+  lines.push('');
+  lines.push('## 总结');
+  const summary = buildSummary({ speech, tone, keywords, interaction });
+  lines.push(summary.overview);
+  if (summary.focus) lines.push(summary.focus);
+  lines.push(summary.verdict);
   lines.push('');
   lines.push('> 说明：语音转写由 Whisper 或人工完成；语速、语调、关键词与互动均为基于转写文本的统计，供教师复盘参考。');
   return lines.join('\n');

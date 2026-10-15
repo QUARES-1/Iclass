@@ -12,6 +12,7 @@ import {
   analyzeInteraction,
   buildTimeline,
   buildClassroomRecord,
+  buildSummary,
   formatTime,
 } from '../src/classroom.js';
 
@@ -322,7 +323,8 @@ function renderAnalysis() {
 // —— 步骤4：课堂报告 ——
 function renderTimeline() {
   const host = $('#timeline-result');
-  const { speech, keywords } = computeAnalysis();
+  const { speech, tone, keywords, interaction } = computeAnalysis();
+  const summary = buildSummary({ speech, tone, keywords, interaction });
   const events = buildTimeline(state.schedule, state.speechSegments);
 
   const items = events
@@ -342,6 +344,12 @@ function renderTimeline() {
   const questionCount = events.filter((e) => e.type === 'question').length;
 
   host.innerHTML = `
+    <div class="card">
+      <h3>📋 课堂总结</h3>
+      <p>${esc(summary.overview)}</p>
+      ${summary.focus ? `<p>${esc(summary.focus)}</p>` : ''}
+      <p><strong>${esc(summary.verdict)}</strong></p>
+    </div>
     <div class="tl-summary">
       <div class="summary-item"><div class="num">${events.length}</div><div class="label">时间轴事件</div></div>
       <div class="summary-item"><div class="num">${speech.segmentCount}</div><div class="label">转写片段</div></div>
