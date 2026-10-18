@@ -277,6 +277,28 @@ export async function runTeachingAgent(job, { config = {}, call = requestJSON, r
       const task = job.tasks[job.cursor], state = toolState(job), targetId = task.resourceId?.startsWith('step:') ? job.created[task.resourceId.slice(5)] : task.resourceId && task.resourceId !== 'current' ? task.resourceId : state.selectedId;
       const target = state.resources.find(r => r.id === (job.created[task.id] || targetId));
       const priorCode=codeGroups(target);
+      if(job.repairRound && task.tool==='ppt.update' && target?.type==='ppt'){
+        const present=new Set(currentVersion(target).content.slides.map(s=>s.id));
+        const missing=task.targetIds.filter(pid=>!present.has(pid));
+        // Repairs are planned against one snapshot. An earlier repair can delete
+        // duplicate pages that a later repair also references. Refresh only IDs
+        // known to this job; never map a missing page onto an unrelated page.
+        const completed=job.observations.filter(o=>o.kind==='tool-result'&&o.resourceId===target.id);
+        const known=new Set(completed.flatMap(o=>[
+          ...(job.stepPages?.[o.stepId]||[]),
+          ...(job.tasks.slice(0,job.cursor).find(t=>t.taskId===o.taskId)?.targetIds||[]),
+        ]));
+        if(missing.length && missing.every(pid=>known.has(pid))){
+          task.targetIds=task.targetIds.filter(pid=>present.has(pid));
+          if(task.requiredTargetIds)task.requiredTargetIds=task.requiredTargetIds.filter(pid=>present.has(pid));
+          task.pageCount=Math.max(1,task.targetIds.length);task.attempts=0;
+          task.feedback='前序修正已移除重复页 '+missing.join('、')+'；这些ID已从本批目标中移除。只修改当前仍存在的目标页，整份草稿随后重新检查。';
+          delete job.pendingCandidate;if(job.pendingCandidates)delete job.pendingCandidates[task.taskId];
+          job.observations.push({kind:'task-target-refresh',stepId:task.id,taskId:task.taskId,resourceId:target.id,removedIds:missing,text:task.feedback});
+          if(!task.targetIds.length){job.cursor++;await checkpoint(job);continue;}
+          await checkpoint(job);
+        }
+      }
       if(job.repairRound&&target?.type==='ppt'){
         const required=job.scopeIds?task.targetIds.filter(id=>job.scopeIds.includes(id)):requiredRepairTargets(task,currentVersion(target).content.slides);
         if(!task.requiredTargetIds&&required.length<task.targetIds.length&&/本步骤要求真实示例代码.*没有返回code\.source/.test(task.feedback||''))delete task.feedback;
@@ -477,6 +499,7 @@ export async function runTeachingAgent(job, { config = {}, call = requestJSON, r
           if (reviewed?.action !== 'review' || typeof reviewed.passed !== 'boolean' || !Array.isArray(reviewed.issues) || !Array.isArray(reviewed.repairSteps)) throw new AppError('检查工具返回的结构无效。');
           if (reviewed.suggestions !== undefined && (!Array.isArray(reviewed.suggestions) || reviewed.suggestions.some(s => typeof s !== 'string'))) throw new AppError('检查建议格式无效。');
           if (reviewed.issues.some(s => typeof s !== 'string' || /未发现.{0,8}错误|没有计算错误|无需(?:修改|修正|改动)|无须(?:修改|修正)/.test(s))) throw new AppError('检查结果把已排除或无需修改的问题列为缺陷。请重新独立核算，只保留证实的错误；正确内容从issues和repairSteps移除，可选改进放suggestions。');
+          if (reviewed.issues.some(s=>s.length>600)) throw new AppError('检查缺陷描述过长。每条issues最多600字符，只写具体页面、已证实的缺陷和修正目标；不要输出反复推演、先判错再自我否定的过程。同一缺陷合并为一条，正确内容不列入issues。');
           if (!reviewed.passed && !reviewed.repairSteps.length) throw new AppError('检查发现问题但没有提供可执行修正。');
           if (reviewed.passed && (reviewed.issues.length || reviewed.repairSteps.length)) throw new AppError('检查结果矛盾：仍有问题或修正步骤时不能标记通过。');
           if(!reviewed.passed)validatePlan({action:'plan',steps:reviewed.repairSteps},job,config,index,true,false);

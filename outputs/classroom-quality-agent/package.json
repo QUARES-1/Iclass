@@ -8,7 +8,7 @@
     "start": "node server.js",
     "test": "node --test",
     "test:browser": "playwright test",
-    "speech:prepare": ".venv/bin/python speech/prepare.py"
+    "speech:prepare": "node scripts/prepare-speech.mjs"
   },
   "engines": {
     "node": ">=20.12"

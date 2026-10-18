@@ -8,9 +8,24 @@ import tempfile
 import subprocess
 import time
 import uuid
-import resource
 import math
 from pathlib import Path
+
+try:
+    import resource
+except ImportError:
+    resource = None  # Optional Unix memory telemetry must not block Windows ASR.
+
+# Keep direct CLI execution consistent with the Node UTF-8 protocol as well.
+for output in (sys.stdout, sys.stderr):
+    if hasattr(output, 'reconfigure'):
+        output.reconfigure(encoding='utf-8')
+
+
+def peak_resident_bytes():
+    if resource is None:
+        return None
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == 'darwin' else 1024)
 
 try:
     MAX_SECONDS = float(os.environ.get('AUDIO_MAX_SECONDS', '10800'))
@@ -66,7 +81,7 @@ def transcribe(file):
     fingerprint = {'file': str(Path(file).resolve()), 'bytes': Path(file).stat().st_size, 'mtime': Path(file).stat().st_mtime_ns, 'chunkSeconds': CHUNK_SECONDS, 'model': model_path}
     checkpoint = {}
     if checkpoint_path and Path(checkpoint_path).exists():
-        checkpoint = json.loads(Path(checkpoint_path).read_text())
+        checkpoint = json.loads(Path(checkpoint_path).read_text(encoding='utf-8'))
         if checkpoint.get('fingerprint') != fingerprint:
             raise ValueError('录音或识别配置已变化，请新建转写任务，不沿用旧分段。')
     offset = float(checkpoint.get('offset', 0))
@@ -113,14 +128,14 @@ def transcribe(file):
             if checkpoint_path:
                 target = Path(checkpoint_path)
                 temporary = target.with_suffix('.tmp')
-                temporary.write_text(json.dumps({'fingerprint': fingerprint, 'offset': offset, 'segments': merged, 'chunks': chunks}, ensure_ascii=False))
+                temporary.write_text(json.dumps({'fingerprint': fingerprint, 'offset': offset, 'segments': merged, 'chunks': chunks}, ensure_ascii=False), encoding='utf-8')
                 temporary.chmod(0o600)
                 temporary.replace(target)
             emit({'stage': 'chunk-complete', 'completedParts': len(chunks), 'totalParts': math.ceil(duration / CHUNK_SECONDS)})
     merged.sort(key=lambda s: s['start'])
     if not merged:
         raise ValueError('未识别到语音，请检查录音内容和音量。')
-    emit({'stage': 'completed', 'result': {'segments': merged, 'duration': duration, 'chunks': chunks, 'model': model_path, 'device': os.environ.get('ASR_DEVICE', 'cpu'), 'computeType': os.environ.get('ASR_COMPUTE_TYPE', 'int8'), 'elapsedSeconds': round(time.monotonic()-started, 3), 'peakResidentBytes': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == 'darwin' else 1024)}})
+    emit({'stage': 'completed', 'result': {'segments': merged, 'duration': duration, 'chunks': chunks, 'model': model_path, 'device': os.environ.get('ASR_DEVICE', 'cpu'), 'computeType': os.environ.get('ASR_COMPUTE_TYPE', 'int8'), 'elapsedSeconds': round(time.monotonic()-started, 3), 'peakResidentBytes': peak_resident_bytes()}})
 
 def playback(file):
     import imageio_ffmpeg

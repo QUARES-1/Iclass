@@ -1,10 +1,12 @@
 // Deterministic model fixture for browser integration; never used in the app.
 import http from 'node:http';
+import {fileURLToPath} from 'node:url';
 import fs from 'node:fs/promises';
 import { sampleActivities } from '../src/samples.js';
 import { codeFixture } from '../test-support/codeFixture.js';
-process.env.PORT='3107';process.env.LLM_RATE_LIMIT='1000';process.env.LLM_BASE_URL='http://127.0.0.1:3108';process.env.LLM_API_KEY='browser-test-fixture';process.env.DATA_DIR=new URL('../artifacts/browser-data',import.meta.url).pathname;
+process.env.PORT='3107';process.env.LLM_RATE_LIMIT='1000';process.env.LLM_BASE_URL='http://127.0.0.1:3108';process.env.LLM_API_KEY='browser-test-fixture';process.env.DATA_DIR=fileURLToPath(new URL('../artifacts/browser-data',import.meta.url));
 await fs.rm(process.env.DATA_DIR,{recursive:true,force:true});
+await fs.mkdir(process.env.DATA_DIR,{recursive:true});
 const truncated=new Set(),reviewed=new Set();
 const mock=http.createServer(async(req,res)=>{
   let data='';for await(const c of req)data+=c;

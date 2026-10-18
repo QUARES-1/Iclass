@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync } from 'node:fs';
+import { pythonExecutable, pythonEnvironment } from './python.js';
 import { AppError } from './store.js';
 const activeChildren = new Set();
 export function stopSpeechWorkers() { for (const child of activeChildren) {try{if(process.platform!=='win32')process.kill(-child.pid,'SIGTERM');else child.kill('SIGTERM');}catch{/* Already exited. */}} }
@@ -9,8 +9,8 @@ export function stopSpeechWorkers() { for (const child of activeChildren) {try{i
 export function speechCommand(root, mode, file, onEvent = () => {}, options = {}) {
   return new Promise((resolve, reject) => {
     if(options.signal?.aborted)return reject(new AppError('任务已暂停，已完成分段保留。',499));
-    const python = process.env.PYTHON_BIN || (existsSync(path.join(root, '.venv/bin/python')) ? path.join(root, '.venv/bin/python') : 'python3');
-    const child = spawn(python, [path.join(root, 'speech/worker.py'), mode, file], { cwd: root, detached:process.platform!=='win32',env: { ...process.env, PYTHONUNBUFFERED: '1', HF_HUB_OFFLINE: '1',...(options.checkpointPath?{ASR_CHECKPOINT:options.checkpointPath}:{}),...(options.playbackPath?{PLAYBACK_TARGET:options.playbackPath}:{}) }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const python = pythonExecutable(root);
+    const child = spawn(python, [path.join(root, 'speech/worker.py'), mode, file], { cwd: root, detached:process.platform!=='win32',env: { ...pythonEnvironment(), HF_HUB_OFFLINE: '1',...(options.checkpointPath?{ASR_CHECKPOINT:options.checkpointPath}:{}),...(options.playbackPath?{PLAYBACK_TARGET:options.playbackPath}:{}) }, stdio: ['ignore', 'pipe', 'pipe'] });
     const kill=signal=>{try{if(process.platform!=='win32')process.kill(-child.pid,signal);else child.kill(signal);}catch{/* Already exited. */}};
     const abort=()=>kill('SIGTERM');options.signal?.addEventListener('abort',abort,{once:true});
     activeChildren.add(child);

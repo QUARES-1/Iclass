@@ -14,6 +14,60 @@ const passed={action:'review',passed:true,reply:'检查通过',issues:[],repairS
 function createFor(input){return {action:'create',type:'ppt',name:'教学课件',reply:'本批已完成',content:{slides:Array.from({length:input.task.pageCount},(_,i)=>page('新页 '+(input.task.pageStart+i)))}};}
 function addFor(input){return {action:'update',reply:'本批已完成',operations:Array.from({length:input.task.pageCount},(_,i)=>({action:'add',slide:page('新页 '+(input.task.pageStart+i))}))};}
 
+test('前序修正删除重叠目标后刷新后续任务，保留仍存在的页面并重新检查',async()=>{
+  const state=emptyWorkspace(),job=newAgentJob(state,'新建课件');let repaired=0;
+  await runTeachingAgent(job,{config,call:async(_,input)=>{
+    if(input.phase==='decide')return plan([step({pages:2})]);
+    if(input.phase==='review'){
+      if(job.repairRound){assert.equal(currentVersion(job.drafts[0]).content.slides.length,1);return passed;}
+      const r=job.drafts[0],[a,b]=currentVersion(r).content.slides;
+      return {action:'review',passed:false,reply:'修正重叠目标',issues:['删除重复页并统一表述'],repairSteps:[
+        step({id:'delete-duplicate',tool:'ppt.update',resourceId:r.id,targetIds:[b.id],pages:1,minutes:0,instructions:'删除重复页'}),
+        step({id:'wording',tool:'ppt.update',resourceId:r.id,targetIds:[a.id,b.id],pages:2,minutes:0,instructions:'统一表述'}),
+      ]};
+    }
+    if(!job.repairRound)return createFor(input);
+    repaired++;
+    if(repaired===1)return {action:'update',reply:'删除重复页',operations:[{action:'delete',slideId:input.task.targetIds[0]}]};
+    assert.equal(input.task.targetIds.length,1);assert.deepEqual(input.task.requiredTargetIds,input.task.targetIds);
+    assert.match(input.feedback,/前序修正已移除/);
+    return {action:'update',reply:'统一表述',operations:[{action:'update',slideId:input.task.targetIds[0],patch:{title:'修正后的表述'}}]};
+  }});
+  assert.equal(repaired,2);assert.equal(job.review.passed,true);
+  assert.ok(job.observations.some(o=>o.kind==='task-target-refresh'));
+  assert.equal(currentVersion(job.drafts[0]).content.slides[0].title,'修正后的表述');
+});
+
+test('旧失败检查点移除已删目标，清理旧候选；全部目标已删时仍重新检查',async()=>{
+  for(const allRemoved of [false,true]){
+    const state=emptyWorkspace(),r=createResource(state,'ppt','保留原稿',{slides:[page('现有页面')]}),pid=currentVersion(r).content.slides[0].id;
+    const job=newAgentJob(state,'修正课件',r.id);job.plan=plan([step({pages:1})]);job.repairRound=1;
+    const task=step({tool:'ppt.update',resourceId:r.id,targetIds:allRemoved?['removed']:[pid,'removed'],pages:2,minutes:0});
+    job.tasks=[{...task,taskId:'done',targetIds:['removed']},{...task,taskId:'remaining',requiredTargetIds:[...task.targetIds],attempts:4,pageCount:2,part:1,parts:1,pageStart:1}];job.cursor=1;
+    job.observations=[{kind:'tool-result',resourceId:r.id,taskId:'done',stepId:'done'}];
+    job.pendingCandidate={action:'update',operations:[{action:'update',slideId:'removed',patch:{title:'不能使用旧候选'}}]};
+    let executions=0,reviews=0;
+    await runTeachingAgent(job,{config,call:async(_,input)=>{
+      if(input.phase==='review'){reviews++;return passed;}
+      executions++;assert.deepEqual(input.task.targetIds,[pid]);assert.equal(input.task.attempts,0);
+      return {action:'update',reply:'继续执行',operations:[{action:'update',slideId:pid,patch:{title:'更新后的页面'}}]};
+    }});
+    assert.equal(executions,allRemoved?0:1);assert.equal(reviews,1);assert.equal(job.review.passed,true);
+    assert.equal(currentVersion(r).content.slides[0].title,'现有页面');
+    assert.equal(job.pendingCandidate,undefined);
+  }
+});
+
+test('未知页面不能借目标刷新绕过校验或被重定向到其他资源',async()=>{
+  const state=emptyWorkspace(),r=createResource(state,'ppt','原稿',{slides:[page('保留')]}),job=newAgentJob(state,'修正课件',r.id);
+  const task=step({tool:'ppt.update',resourceId:r.id,targetIds:['unknown'],pages:1,minutes:0});
+  job.plan=plan([task]);job.repairRound=1;job.tasks=[{...task,taskId:'bad',requiredTargetIds:['unknown'],pageCount:1,part:1,parts:1,pageStart:1,attempts:0}];
+  job.observations=[{kind:'tool-result',resourceId:'another-resource',stepId:'other',taskId:'other'}];job.stepPages={other:['unknown']};
+  await assert.rejects(runTeachingAgent(job,{config:{...config,maxRepairs:0},call:async()=>({action:'update',reply:'错误引用',operations:[{action:'update',slideId:'unknown',patch:{title:'错误'}}]})}),/不存在的页面/);
+  assert.deepEqual(job.tasks[0].targetIds,['unknown']);assert.equal(job.drafts.length,0);
+  assert.equal(currentVersion(r).content.slides[0].title,'保留');
+});
+
 test('自动修正返回相同补丁时重新检查，不重复写入或声称已修正',async()=>{
   const state=emptyWorkspace(),job=newAgentJob(state,'新建课件');let reviews=0,repairs=0;
   await runTeachingAgent(job,{config,call:async(system,input)=>{
@@ -285,6 +339,19 @@ test('检查不能把已经排除的计算疑点当作缺陷触发修正',async(
     return createFor(input);
   }});
   assert.equal(result.action,'agent-commit');assert.equal(job.repairRound,0);assert.equal(reviews,2);assert.equal(job.review.passed,true);
+});
+
+test('检查长篇推演先要求简洁证据，不消耗修正轮次或自动放行',async()=>{
+  const job=newAgentJob(emptyWorkspace(),'新建课件');let reviews=0;
+  await runTeachingAgent(job,{config,call:async(_,input)=>{
+    if(input.phase==='decide')return plan([step({pages:1})]);
+    if(input.phase==='review'){
+      if(!reviews++)return {action:'review',passed:false,reply:'待核实',issues:['反复推演'.repeat(151)],repairSteps:[step({tool:'ppt.update',pages:1,minutes:0})]};
+      assert.match(input.feedback,/最多600字符/);return passed;
+    }
+    return createFor(input);
+  }});
+  assert.equal(reviews,2);assert.equal(job.repairRound,0);assert.equal(job.review.passed,true);
 });
 
 test('输出超限自动将三页拆为一页和两页，连续新增保持顺序',async()=>{

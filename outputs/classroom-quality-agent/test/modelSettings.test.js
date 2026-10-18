@@ -19,7 +19,8 @@ test('设置保存后重建服务可恢复，密钥不回显，留空保留、�
     let saved = await settings.save({ revision: 0, model: 'new-model', baseUrl: 'https://new.example/v1/chat/completions/', apiKey: '', prompts: { preparation: '教师自定义：300分钟课程，详讲原理与实操。' } });
     assert.equal(saved.apiKey, env.LLM_API_KEY); assert.equal(saved.baseUrl, 'https://new.example/v1');
     assert.deepEqual(await new ModelSettings(root, env).read(), saved);
-    assert.equal((await stat(path.join(root, 'model-settings.json'))).mode & 0o777, 0o600);
+    // Windows uses ACLs; Node's POSIX mode bits cannot assert owner-only access.
+    if (process.platform !== 'win32') assert.equal((await stat(path.join(root, 'model-settings.json'))).mode & 0o777, 0o600);
     saved = await settings.save({ revision: saved.revision, apiKey: 'replacement-secret' });
     assert.equal(saved.apiKey, 'replacement-secret'); assert.equal(saved.model, 'new-model');
     assert.equal(saved.prompts.preparation, '教师自定义：300分钟课程，详讲原理与实操。');

@@ -28,9 +28,23 @@
 | S2-05 长音频 | 对开头、中段、末尾和全部分段交界人工听校，记录漏识别、重复及时间偏差 |
 | S2-07 异常与资源不足 | 真实内存或其它资源压力下的失败与恢复；现有坏文件、缺模型、API失败和任务时限已测 |
 
-已验证环境是macOS、Apple Silicon和Chrome。Linux、Windows原生、Safari及GPU没有完整验证结论。当前Windows音频实现还依赖Unix接口，不应按现有说明承诺直接运行。
+上述历史完整验收环境是macOS、Apple Silicon和Chrome。Linux、Safari及GPU没有完整验证结论。Windows后续兼容验证见下文，不能替代完整课堂验收。
 
 识别有同音词和专名错误，模型结论和证据的语义关系仍需教师复核。报告不推断学生是否听懂、专注或掌握；时间估算不等同于声学测量。课件内容与算法正确性不由自动回归结果保证。
+
+## Windows语音兼容补充（2026-10-18）
+
+修复了虚拟环境路径选择、Unix可选资源统计、中文管道及检查点UTF-8编码；模型准备命令和恢复验证脚本共用跨平台解释器选择。PyAV固定为原锁文件中的18.1.0，避免19版移除`metadata_errors`后与faster-whisper 1.2.1不兼容。
+
+本机Windows、Python 3.12.3、CPU/int8、Whisper small及Chrome验证结果：
+
+- 265项单元/接口测试通过；新增Windows/macOS/Linux解释器选择和缺少resource时的Unicode输出检查。Windows不执行POSIX权限位断言，未以此验证Windows ACL。
+- 15项音频页面Chrome回归通过，包含真实短音频上传识别、模拟设备录音保存、回放、校正、报告修订及导出；文本模型为测试夹具。
+- 5.547秒公开中文音频真实识别通过，中文无编码损坏；检查点UTF-8读写、MP3回放转换通过。识别仍有同音词错误，不代表准确率验收通过。
+- 32秒测试音频分4块，首块后暂停，继续从10秒开始，保留已有片段ID和内容。
+- Windows内存统计`peakResidentBytes`为null；macOS/Linux保留原有resource统计。
+
+本次未在Mac实机复测，也未完成Windows物理麦克风、完整课堂长录音或资源压力验收。未修改个人`.env`和模型服务密钥。证据位于本机`windows-speech-tests.log`、`windows-audio-browser.log`、`artifacts/windows-speech-check/result.json`及`artifacts/sprint2-fixed/resume-verification.json`。
 
 ## 记录位置
 

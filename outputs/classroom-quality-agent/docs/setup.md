@@ -2,7 +2,7 @@
 
 ## 平台与下载项
 
-已验证平台是macOS 15.7、Apple Silicon，CPU推理。Linux需要在目标机器验证；Windows原生音频处理还需要适配，当前Python进程路径和[resource资源统计](https://docs.python.org/3/library/resource.html)使用Unix接口。部署命令以下述macOS环境为准。
+历史完整验收平台是macOS 15.7、Apple Silicon，CPU推理。语音进程现按平台选择虚拟环境：Windows 使用 `.venv/Scripts/python.exe`，macOS/Linux 使用 `.venv/bin/python`，显式 `PYTHON_BIN` 配置优先。语音输出和检查点统一使用 UTF-8；Windows 不提供 Unix `resource` 内存统计，`peakResidentBytes` 为 null，不影响识别。Linux仍需要在目标机器验证。下述 shell 命令以macOS为例。
 
 安装[Node.js 24 LTS](https://nodejs.org/en/download)、[Python 3.11](https://www.python.org/downloads/)和[Google Chrome](https://www.google.com/chrome/)。项目的Node最低要求是20.12，建议新环境使用受支持的LTS版本。
 
@@ -26,6 +26,17 @@ npm start
 ```
 
 上述Python锁文件记录实测依赖组合。更换平台后如果缺少对应wheel，需要在该平台处理安装问题并重新验证。
+
+Windows PowerShell 可执行以下命令（无需激活虚拟环境）：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r speech/requirements.txt
+npm.cmd run speech:prepare
+npm.cmd start
+```
+
+`npm run speech:prepare` 在两个平台上使用同一解释器选择逻辑，并读取项目 `.env` 中的模型下载目录配置。不要将某台机器的绝对 `PYTHON_BIN` 路径复制到另一台机器；通常留空即可。每台机器分别创建虚拟环境和准备模型，`.venv` 不应跨系统复制。
 
 进入http://127.0.0.1:3000。服务首次启动会按使用需要创建`data/`，开始时没有个人课件、录音或配置。“载入本地示例”可用于体验资源预览、编辑和导出。
 
@@ -55,7 +66,7 @@ cp .env.example .env
 | --- | --- |
 | `HOST` / `PORT` | `127.0.0.1` / `3000`，本机监听 |
 | `DATA_DIR` | 项目`data/`，不得放在`public/`内 |
-| `PYTHON_BIN` | 优先`.venv/bin/python`，否则`python3` |
+| `PYTHON_BIN` | 显式配置优先；否则使用本平台`.venv`，Windows回退`python`，macOS/Linux回退`python3` |
 | `ASR_MODEL` | `data/models/whisper-small/` |
 | `ASR_DEVICE` / `ASR_COMPUTE_TYPE` | `cpu` / `int8` |
 | `ASR_THREADS` / `ASR_CHUNK_SECONDS` | `4` / `180` |
