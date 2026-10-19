@@ -1,0 +1,17 @@
+{
+  "name": "classroom-feedback-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "课堂质量改进智能体 · 课后问卷（金数据）API 交付包",
+  "type": "module",
+  "scripts": {
+    "create-survey": "node scripts/create-survey.mjs",
+    "import-samples": "node scripts/import-samples.mjs",
+    "list-responses": "node scripts/list-responses.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "license": "MIT"
+}

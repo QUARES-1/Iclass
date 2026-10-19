@@ -1,0 +1,98 @@
+[
+  {
+    "field_1": "session_05",
+    "field_2": "hard",
+    "field_3": "pace_fast",
+    "field_4": "understood_some",
+    "field_5": 4,
+    "field_6": "interaction_ok",
+    "field_7": ["hard_algorithm", "hard_complexity"],
+    "field_8": ["need_code_demo", "need_discussion"],
+    "field_9": 4,
+    "field_10": "二叉树遍历的非递归实现希望再演示一遍，配合栈的调用过程。"
+  },
+  {
+    "field_1": "session_05",
+    "field_2": "moderate",
+    "field_3": "pace_ok",
+    "field_4": "understood_most",
+    "field_5": 5,
+    "field_6": "interaction_good",
+    "field_7": ["hard_code"],
+    "field_8": ["need_practice"],
+    "field_9": 5,
+    "field_10": ""
+  },
+  {
+    "field_1": "session_05",
+    "field_2": "very_hard",
+    "field_3": "pace_fast",
+    "field_4": "understood_little",
+    "field_5": 3,
+    "field_6": "interaction_poor",
+    "field_7": ["hard_algorithm", "hard_code", "hard_complexity"],
+    "field_8": ["need_theory", "need_code_demo"],
+    "field_9": 3,
+    "field_10": "复杂度分析讲得有点快，希望多配具体例子。"
+  },
+  {
+    "field_1": "session_02",
+    "field_2": "too_easy",
+    "field_3": "pace_slow",
+    "field_4": "understood_all",
+    "field_5": 5,
+    "field_6": "interaction_ok",
+    "field_7": [],
+    "field_8": ["need_practice"],
+    "field_9": 5,
+    "field_10": ""
+  },
+  {
+    "field_1": "session_02",
+    "field_2": "moderate",
+    "field_3": "pace_ok",
+    "field_4": "understood_most",
+    "field_5": 4,
+    "field_6": "interaction_good",
+    "field_7": ["hard_complexity"],
+    "field_8": ["need_review"],
+    "field_9": 4,
+    "field_10": ""
+  },
+  {
+    "field_1": "session_03",
+    "field_2": "moderate",
+    "field_3": "pace_ok",
+    "field_4": "understood_most",
+    "field_5": 5,
+    "field_6": "interaction_good",
+    "field_7": ["hard_code"],
+    "field_8": ["need_code_demo"],
+    "field_9": 5,
+    "field_10": "希望多给一些用栈和队列解决实际问题的例子。"
+  },
+  {
+    "field_1": "session_03",
+    "field_2": "hard",
+    "field_3": "pace_fast",
+    "field_4": "understood_some",
+    "field_5": 4,
+    "field_6": "interaction_ok",
+    "field_7": ["hard_algorithm", "hard_code"],
+    "field_8": ["need_practice", "need_discussion"],
+    "field_9": 4,
+    "field_10": ""
+  },
+  {
+    "field_1": "session_01",
+    "field_2": "moderate",
+    "field_3": "pace_ok",
+    "field_4": "understood_most",
+    "field_5": 5,
+    "field_6": "interaction_good",
+    "field_7": ["hard_complexity"],
+    "field_8": ["need_review"],
+    "field_9": 5,
+    "field_10": "绪论讲得很清晰，希望后续继续保持代码示例。"
+  }
+]

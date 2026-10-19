@@ -1,0 +1,111 @@
+{
+  "name": "《数据结构》课堂反馈问卷",
+  "description": "请用约 1 分钟反馈本节课的学习体验，帮助教师改进教学。问卷匿名填写，仅用于教学改进，不收集个人身份信息。",
+  "scene": "survey",
+  "layout": "classic",
+  "fields": [
+    {
+      "type": "DropDown",
+      "label": "本节课对应的课堂",
+      "required": true,
+      "choices": [
+        { "value": "第1次课 绪论与算法复杂度", "api_code": "session_01" },
+        { "value": "第2次课 线性表", "api_code": "session_02" },
+        { "value": "第3次课 栈与队列", "api_code": "session_03" },
+        { "value": "第4次课 串与数组", "api_code": "session_04" },
+        { "value": "第5次课 树与二叉树", "api_code": "session_05" },
+        { "value": "第6次课 图", "api_code": "session_06" },
+        { "value": "第7次课 查找", "api_code": "session_07" },
+        { "value": "第8次课 排序", "api_code": "session_08" }
+      ]
+    },
+    {
+      "type": "RadioButton",
+      "label": "本节课内容难度",
+      "required": true,
+      "choices": [
+        { "value": "太简单", "api_code": "too_easy" },
+        { "value": "比较适中", "api_code": "moderate" },
+        { "value": "偏难", "api_code": "hard" },
+        { "value": "太难", "api_code": "very_hard" }
+      ]
+    },
+    {
+      "type": "RadioButton",
+      "label": "课堂节奏",
+      "required": true,
+      "choices": [
+        { "value": "偏慢", "api_code": "pace_slow" },
+        { "value": "适中", "api_code": "pace_ok" },
+        { "value": "偏快", "api_code": "pace_fast" }
+      ]
+    },
+    {
+      "type": "RadioButton",
+      "label": "核心知识点的理解程度",
+      "required": true,
+      "choices": [
+        { "value": "完全掌握", "api_code": "understood_all" },
+        { "value": "大部分掌握", "api_code": "understood_most" },
+        { "value": "基本掌握", "api_code": "understood_some" },
+        { "value": "不太理解", "api_code": "understood_little" }
+      ]
+    },
+    {
+      "type": "RatingField",
+      "label": "讲解清晰度",
+      "required": true,
+      "rating_max": 5
+    },
+    {
+      "type": "RadioButton",
+      "label": "课堂互动是否充分",
+      "required": true,
+      "choices": [
+        { "value": "很充分", "api_code": "interaction_good" },
+        { "value": "一般", "api_code": "interaction_ok" },
+        { "value": "不够充分", "api_code": "interaction_poor" }
+      ]
+    },
+    {
+      "type": "CheckBox",
+      "label": "你感到最难的部分（可多选）",
+      "required": false,
+      "choices": [
+        { "value": "基本概念", "api_code": "hard_concept" },
+        { "value": "算法思想", "api_code": "hard_algorithm" },
+        { "value": "代码实现", "api_code": "hard_code" },
+        { "value": "复杂度分析", "api_code": "hard_complexity" },
+        { "value": "例题应用", "api_code": "hard_example" }
+      ]
+    },
+    {
+      "type": "CheckBox",
+      "label": "希望下节课加强（可多选）",
+      "required": false,
+      "choices": [
+        { "value": "原理讲解", "api_code": "need_theory" },
+        { "value": "示例代码演示", "api_code": "need_code_demo" },
+        { "value": "课堂练习", "api_code": "need_practice" },
+        { "value": "答疑与讨论", "api_code": "need_discussion" },
+        { "value": "复习与总结", "api_code": "need_review" }
+      ]
+    },
+    {
+      "type": "RatingField",
+      "label": "对本节课的整体评价",
+      "required": true,
+      "rating_max": 5
+    },
+    {
+      "type": "TextArea",
+      "label": "其他建议（可选）",
+      "required": false,
+      "placeholder": "可以写下你希望老师调整或补充的地方"
+    }
+  ],
+  "setting": {
+    "entry_submit_mode": "show_message",
+    "success_message": "感谢你的反馈！"
+  }
+}
