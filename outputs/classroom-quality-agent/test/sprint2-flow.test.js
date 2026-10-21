@@ -93,6 +93,75 @@ async function withClassroom(options, run) {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
+test('更换录音的自动清理不会删除归档或反馈课堂仍引用的音频',async()=>{
+  const {writeFile}=await import('node:fs/promises');
+  await withClassroom({},async api=>{
+    const first=await api.upload();await writeFile(path.join(api.dataDir,'storage-archives.json'),JSON.stringify({revision:0,items:[{id:'archive',audioFiles:[first.audio.file]}]}));
+    const second=await api.upload();await api.command({action:'course',course:{title:'',description:''}});assert.equal(await readFile(path.join(api.dataDir,'audio',first.audio.file),'utf8'),'isolated audio fixture');
+    await writeFile(path.join(api.dataDir,'feedback-source-legacy.json'),JSON.stringify({revision:0,id:'legacy',audio:second.audio}));await writeFile(path.join(api.dataDir,'storage-audio-pins.json'),JSON.stringify({revision:0,sources:{},complete:false}));
+    await api.upload();await api.command({action:'course',course:{title:'',description:''}});assert.equal(await readFile(path.join(api.dataDir,'audio',second.audio.file),'utf8'),'isolated audio fixture');
+  });
+});
+
+test('清空等待旧语音进程退出期间，新上传录音及其回放文件保留，响应使用最新状态', {timeout:15000},async()=>{
+  let entered,release;const ready=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  await withClassroom({speechCall:async(mode,...args)=>{if(mode!=='transcribe')return speechCall(mode,...args);entered();await gate;return {segments};}},async api=>{
+    try{
+      const old=await api.upload(),started=await api.post('/api/classroom/transcribe',{revision:old.revision},202);await ready;
+      await api.post('/api/classroom/jobs/'+started.jobs.at(-1).id+'/pause',{revision:(await api.getState()).revision});
+      const clearing=api.command({action:'clear'});
+      for(let i=0;i<200&&(await api.getState()).audio;i++)await delay(5);
+      assert.equal((await api.getState()).audio,null);
+      const next=await api.upload('new.wav');release();const cleared=await clearing;
+      assert.equal(cleared.audio?.id,next.audio.id,'清空响应不能回滚到旧的空状态');
+      const response=await api.request('/api/classroom/audio?id='+next.audio.id);assert.equal(response.status,200);assert.equal(await response.text(),'isolated audio fixture');
+      await assert.rejects(readFile(path.join(api.dataDir,'audio',old.audio.file)),{code:'ENOENT'});
+    }finally{release();}
+  });
+});
+test('同一上下文的复盘并发提交只调用一次模型，完成后释放占用',async()=>{
+  let entered,release,calls=0;const ready=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  await withClassroom({modelCall:async()=>{calls++;entered();await gate;return {action:'reply',reply:'你好！'};}},async api=>{
+    try{
+      const revision=(await api.getState()).revision,first=api.post('/api/classroom/chat',{revision,request:'你好'});await ready;
+      const secondPending=api.request('/api/classroom/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision,request:'再问一次'})});
+      // Release even on a broken implementation, so a failed assertion cannot hang teardown.
+      await delay(50);release();const second=await secondPending;assert.equal(second.status,409);await first;assert.equal(calls,1);
+      await api.post('/api/classroom/chat',{revision:(await api.getState()).revision,request:'接着聊'});assert.equal(calls,2);
+    }finally{release();}
+  });
+});
+test('回放范围支持尾部和超出文件末端的合法请求，拒绝空文件及无效范围',async()=>{
+  await withClassroom({},async api=>{
+    const state=await api.upload(),url='/api/classroom/audio?id='+state.audio.id;
+    let response=await api.request(url,{headers:{Range:'bytes=-7'}});assert.equal(response.status,206);assert.equal(await response.text(),'fixture');
+    response=await api.request(url,{headers:{Range:'bytes=0-999999'}});assert.equal(response.status,206);assert.equal(await response.text(),'isolated audio fixture');
+    for(const range of ['bytes=-0','bytes=99-100','bytes=9-2','bytes=-','bytes=0-1,3-4'])assert.equal((await api.request(url,{headers:{Range:range}})).status,416);
+    const {writeFile}=await import('node:fs/promises');await writeFile(path.join(api.dataDir,'audio',state.audio.file),'');assert.equal((await api.request(url)).status,404);
+  });
+});
+test('反复保存课程或选择当前录音和转写，内容、修订号及报告有效性保持不变',async()=>{
+  await withClassroom({},async api=>{
+    await api.upload();let state=await api.job('transcribe');state=await api.job('analyze');const before=structuredClone(state);
+    for(let i=0;i<100;i++)for(const command of [{action:'course',course:state.course},{action:'selectAudio',audioId:state.audio.id},{action:'selectTranscript',transcriptId:state.currentTranscriptId}])state=await api.post('/api/classroom',{revision:state.revision,...command});
+    assert.deepEqual(state,before);
+  });
+});
+test('新录音探测期间启动分析，拒绝替换或删除正在使用的原录音',async()=>{
+  let probeCount=0,enterProbe,releaseProbe,enterModel,releaseModel;
+  const probeReady=new Promise(r=>enterProbe=r),probeGate=new Promise(r=>releaseProbe=r),modelReady=new Promise(r=>enterModel=r),modelGate=new Promise(r=>releaseModel=r);
+  await withClassroom({speechCall:async(mode,...args)=>{if(mode==='probe'&&++probeCount>1){enterProbe();await probeGate;}return speechCall(mode,...args);},modelCall:async(...args)=>{enterModel();await modelGate;return modelCall(...args);}},async api=>{
+    let pending,analysis;
+    try{
+      await api.upload();const original=await api.job('transcribe');
+      pending=api.request('/api/classroom/audio?name=new.wav&revision='+original.revision,{method:'POST',body:Buffer.from('new isolated fixture')});await probeReady;
+      analysis=api.job('analyze');await modelReady;
+      await api.post('/api/classroom',{revision:(await api.getState()).revision,action:'deleteAudio'},409);
+      releaseProbe();assert.equal((await pending).status,409);assert.equal((await api.getState()).audio.id,original.audio.id);
+      releaseModel();const state=await analysis;assert.equal(state.audio.id,original.audio.id);assert.equal(state.reports.length,1);
+    }finally{releaseProbe();releaseModel();await pending?.catch(()=>{});await analysis?.catch(()=>{});}
+  });
+});
 
 test('Sprint 2 主流程：上传、转写、校正、分析、人工确认、导出与重启恢复', { timeout: 20000 }, async () => {
   const inputs = [];

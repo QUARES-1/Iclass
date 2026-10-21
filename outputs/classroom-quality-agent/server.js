@@ -262,11 +262,11 @@ async function handleExtractFile(req, res, requestUrl) {
   }
 }
 
-const api = createApi(ROOT, { modelSettings });
+const api = createApi(ROOT, { modelSettings, feedbackRateLimit:req=>isRateLimited(req,'llm',LLM_RATE_LIMIT_MAX) });
 export const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
   const requestUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
-  if (req.method === 'POST' && (['/api/workspace/chat', '/api/workspace/agent', '/api/classroom/analyze','/api/classroom/chat', '/api/model-settings/test'].includes(requestUrl.pathname) || /\/api\/workspace\/agent\/[a-f0-9-]+\/resume$/.test(requestUrl.pathname)) && isRateLimited(req, 'llm', LLM_RATE_LIMIT_MAX)) {
+  if (req.method === 'POST' && (['/api/workspace/chat', '/api/workspace/agent', '/api/classroom/analyze','/api/classroom/chat', '/api/model-settings/test'].includes(requestUrl.pathname) || /\/api\/workspace\/agent\/[a-f0-9-]+\/resume$/.test(requestUrl.pathname) || /\/api\/feedback\/sessions\/[a-f0-9-]+\/chat$/.test(requestUrl.pathname)) && isRateLimited(req, 'llm', LLM_RATE_LIMIT_MAX)) {
     json(res, { error: '模型请求过于频繁，请一分钟后重试。' }, 429); return;
   }
 

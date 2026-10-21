@@ -28,7 +28,10 @@ export function scopeFor(state, request, resourceId, pageId) {
   return pageId?[pageId]:null;
 }
 export function compactWorkspace(state) {
-  return { ...clone(state), resources: state.resources.map(r => ({ ...clone(r), versions: [clone(currentVersion(r))] })) };
+  const {resources,messages,...context}=state;
+  return {...clone(context),messages:clone(messages.filter((m,i)=>i>=messages.length-24||m.status==='processing')),resources:resources.map(r=>{
+    const {versions,...metadata}=r;return {...clone(metadata),versions:[clone(currentVersion(r))]};
+  })};
 }
 export function materialIndex(materials) {
   const chunks = [];
@@ -154,7 +157,7 @@ export function newAgentJob(input, request, resourceId, pageId) {
     plan: null, tasks: [], cursor: 0, calls: 0, repairRound: 0, drafts: [], observations: [], anchors: {}, created: {}, workingId: resourceId || input.selectedId, createdAt: new Date().toISOString() };
 }
 export function publicAgentJob(job) {
-  const { input, drafts, tasks, directCandidate, pendingCandidate, pendingCandidates, toolResults, stepPages, codePagingVersion, codeChecks, auditEvidence, ...visible } = job;
+  const { input, inputRef, conversationSnapshot, drafts, tasks, directCandidate, pendingCandidate, pendingCandidates, toolResults, stepPages, codePagingVersion, codeChecks, auditEvidence, ...visible } = job;
   return { ...visible, ...(job.execution === 'direct' ? {plan:null} : {}), completedBatches: job.cursor, totalBatches: tasks?.length || 0,
     draftPages: (drafts || []).filter(r => r.type === 'ppt').reduce((n, r) => n + currentVersion(r).content.slides.length, 0),
     draftResources: (drafts || []).map(r => ({ id: r.id, type: r.type, name: r.name, pages: currentVersion(r).content.slides?.length })),

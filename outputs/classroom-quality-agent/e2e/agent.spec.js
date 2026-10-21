@@ -27,7 +27,7 @@ test('执行途中暂停，刷新保留计划与草稿，继续后不重复创�
   await expect(page.locator('.slide-card')).toHaveCount(7);s=await(await request.get('/api/workspace')).json();expect(s.resources).toHaveLength(1);expect(s.resources[0].versions).toHaveLength(1);
 });
 test('首页设置入口可点击，桌面和手机布局没有横向溢出',async({page})=>{
-  await fs.mkdir('artifacts/agent',{recursive:true});await page.goto('/');await expect(page.getByRole('heading',{name:'备课与课堂复盘'})).toBeVisible();const settings=page.getByRole('link',{name:'模型与提示词设置',exact:true});await expect(settings).toBeVisible();
+  await fs.mkdir('artifacts/agent',{recursive:true});await page.goto('/');await expect(page.getByRole('heading',{name:'我的课程'})).toBeVisible();const settings=page.getByRole('link',{name:'模型与提示词设置',exact:true});await expect(settings).toBeVisible();
   await page.screenshot({path:'artifacts/agent/home-desktop.png'});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await settings.click();await expect(page.locator('#prompt-agent')).toBeVisible();await expect(page.locator('#batch-pages')).toHaveValue('3');
   await page.goto('/');await page.setViewportSize({width:390,height:844});await expect(settings).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'artifacts/agent/home-mobile.png',fullPage:true});

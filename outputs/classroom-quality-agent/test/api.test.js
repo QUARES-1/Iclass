@@ -5,7 +5,88 @@ import { mkdtemp,rm,writeFile,readFile,readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createApi,json } from '../src/api.js';
+import { Store } from '../src/store.js';
 const root=new URL('..',import.meta.url).pathname;
+test('备课进度与共享资料分开保存，连续聊天复用同一份只读资料',async()=>{
+  await withApi({modelCall:async()=>({action:'reply',reply:'你好！'})},async({base,post,dataDir})=>{
+    let revision=0;const refs=[];
+    for(let i=0;i<5;i++){
+      const started=await post('/api/workspace/agent',{revision,request:'你好'});assert.equal(started.status,202);await untilJob(base,started.body.job.id,'completed');
+      const record=JSON.parse(await readFile(path.join(dataDir,'agent-'+started.body.job.id+'.json'),'utf8'));assert.equal(record.input,undefined);assert.ok(record.inputRef);refs.push(record.inputRef);revision=(await(await fetch(base+'/api/workspace')).json()).revision;
+    }
+    assert.equal(new Set(refs).size,1);assert.equal((await readdir(dataDir)).filter(f=>f.startsWith('teaching-input-')).length,1);
+  });
+});
+test('数据管理入口显示空间，拒绝跨源请求及任务执行期间清理',async()=>{
+  let entered,release;const ready=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  await withApi({modelCall:async()=>{entered();await gate;return {action:'reply',reply:'你好！'};}},async({base,post})=>{
+    try{
+      const status=await(await fetch(base+'/api/storage')).json();assert.ok(status.maxBytes>0);assert.equal(status.archives.length,0);
+      const external=await fetch(base+'/api/storage/cleanup',{method:'POST',headers:{Origin:'https://example.org','Content-Type':'application/json'},body:'{}'});assert.equal(external.status,403);
+      const started=await post('/api/workspace/agent',{revision:0,request:'你好'});await ready;assert.equal((await post('/api/storage/cleanup',{})).status,409);release();await untilJob(base,started.body.job.id,'completed');
+      let cleaned;for(let i=0;i<100;i++){cleaned=await post('/api/storage/cleanup',{});if(cleaned.status!==409)break;await new Promise(r=>setTimeout(r,5));}assert.equal(cleaned.status,200);
+    }finally{release();}
+  });
+});
+test('课堂修订号未变化时只返回轻量轮询结果，变化后返回完整内容',async()=>{
+  await withApi({},async({base,post})=>{
+    assert.deepEqual(await(await fetch(base+'/api/classroom?since=0')).json(),{unchanged:true,revision:0});const saved=await post('/api/classroom',{revision:0,action:'course',course:{title:'新课程',description:''}});assert.equal(saved.status,200);
+    const changed=await(await fetch(base+'/api/classroom?since=0')).json();assert.equal(changed.course.title,'新课程');assert.equal(changed.unchanged,undefined);
+  });
+});
+test('Sprint 1 初次保存任务失败，不留下永久处理中的消息，之后可重新发送',async()=>{
+  await withApi({modelCall:async()=>({action:'reply',reply:'你好！'})},async({base,post})=>{
+    const original=Store.prototype.update;let fail=true;
+    Store.prototype.update=function(key,...args){if(key.startsWith('agent-')&&fail){fail=false;return Promise.reject(new Error('fixture storage failure'));}return original.call(this,key,...args);};
+    try{
+      assert.equal((await post('/api/workspace/agent',{revision:0,request:'你好'})).status,500);
+      const state=await(await fetch(base+'/api/workspace')).json();assert.equal(state.messages.length,0);assert.equal(state.revision,0);
+      const started=await post('/api/workspace/agent',{revision:state.revision,request:'你好'});assert.equal(started.status,202);await untilJob(base,started.body.job.id,'completed');
+    }finally{Store.prototype.update=original;}
+  });
+});
+test('前两个 Sprint 的写入接口拒绝非对象 JSON，不产生任务或版本',async()=>{
+  await withApi({},async({base,post})=>{
+    for(const endpoint of ['/api/workspace','/api/workspace/agent','/api/workspace/chat','/api/classroom','/api/classroom/transcribe','/api/classroom/analyze','/api/classroom/chat'])for(const body of [null,[],true,42,'hello'])assert.equal((await post(endpoint,body)).status,400,endpoint+': '+JSON.stringify(body));
+    assert.equal((await(await fetch(base+'/api/workspace')).json()).revision,0);assert.equal((await(await fetch(base+'/api/classroom')).json()).revision,0);
+  });
+});
+test('缺失或非法修订号不能绕过前两个 Sprint 的并发保护',async()=>{
+  await withApi({},async({base,post})=>{
+    for(const endpoint of ['/api/workspace','/api/workspace/chat','/api/classroom','/api/classroom/transcribe','/api/classroom/analyze'])for(const revision of [undefined,null,-1,0.5,'0'])assert.equal((await post(endpoint,{revision,action:'clear',request:'你好'})).status,400,endpoint+': '+revision);
+    assert.equal((await(await fetch(base+'/api/workspace')).json()).revision,0);assert.equal((await(await fetch(base+'/api/classroom')).json()).revision,0);
+  });
+});
+test('任务文件已准备但工作空间写入失败，会移除孤立任务且不调用模型',async()=>{
+  let calls=0;await withApi({modelCall:async()=>{calls++;return {action:'reply',reply:'你好'};}},async({base,post,dataDir})=>{
+    await fetch(base+'/api/workspace');const original=Store.prototype.update;
+    Store.prototype.update=function(key,revision,fallback,change,options){return original.call(this,key,revision,fallback,key==='workspace'?async current=>{await change(current);throw new Error('fixture workspace failure');}:change,options);};
+    try{assert.equal((await post('/api/workspace/agent',{revision:0,request:'你好'})).status,500);assert.deepEqual((await readdir(dataDir)).filter(f=>f.startsWith('agent-')),[]);assert.equal(calls,0);assert.equal((await(await fetch(base+'/api/workspace')).json()).messages.length,0);}
+    finally{Store.prototype.update=original;}
+  });
+});
+test('成果已提交但最终任务状态持续保存失败，仍显示完成且禁止重复提交',async()=>{
+  await withApi({modelCall:async()=>({action:'reply',reply:'只回复一次'})},async({base,post})=>{
+    const original=Store.prototype.update;
+    Store.prototype.update=function(key,revision,fallback,...args){if(key.startsWith('agent-')&&fallback.stage==='completed')return Promise.reject(new Error('fixture final progress failure'));return original.call(this,key,revision,fallback,...args);};
+    try{
+      const start=await post('/api/workspace/agent',{revision:0,request:'你好'});assert.equal(start.status,202);await untilJob(base,start.body.job.id,'completed');
+      const state=await(await fetch(base+'/api/workspace')).json();assert.equal(state.messages[0].status,'complete');assert.equal(state.messages.filter(m=>m.role==='assistant').length,1);
+      assert.equal((await post('/api/workspace/agent/'+start.body.job.id+'/resume',{})).status,409);
+    }finally{Store.prototype.update=original;}
+  });
+});
+test('暂停任务继续时保存失败，保留暂停状态，不阻塞新消息',async()=>{
+  const {newAgentJob}=await import('../src/agent.js'),{emptyWorkspace}=await import('../src/workspace.js');
+  await withApi({},async({base,post,dataDir})=>{
+    const state=emptyWorkspace(),job=newAgentJob(state,'你好');job.stage='paused';job.messageId='paused-message';state.messages=[{id:job.messageId,jobId:job.id,role:'user',text:'你好',status:'paused',mode:'conversation'}];
+    await writeFile(path.join(dataDir,'workspace.json'),JSON.stringify(state));await writeFile(path.join(dataDir,'agent-'+job.id+'.json'),JSON.stringify(job));await fetch(base+'/api/workspace');
+    const original=Store.prototype.update;
+    Store.prototype.update=function(key,...args){if(key.startsWith('agent-'))return Promise.reject(new Error('fixture resume failure'));return original.call(this,key,...args);};
+    try{assert.equal((await post('/api/workspace/agent/'+job.id+'/resume',{})).status,500);assert.equal((await(await fetch(base+'/api/workspace')).json()).messages[0].status,'paused');assert.equal((await(await fetch(base+'/api/workspace/agent/'+job.id)).json()).stage,'paused');}
+    finally{Store.prototype.update=original;}
+  });
+});
 test('旧版本误将问候规划为课件但尚未执行，教师手动继续时重新理解消息；不自动恢复',async()=>{
   const {newAgentJob}=await import('../src/agent.js'),{emptyWorkspace}=await import('../src/workspace.js');let calls=0;
   await withApi({modelCall:async(system,input)=>{calls++;assert.equal(input.phase,'decide');assert.equal(input.request,'你好');return {action:'reply',reply:'你好！'};}},async({base,post,dataDir})=>{

@@ -21,6 +21,20 @@ test('缺少 Access Token 时构造失败', () => {
   assert.throws(() => new JinshujuClient({ accessToken: '', fetchImpl: mockFetch(() => ({})) }), /JINSHUJU_ACCESS_TOKEN/);
   if (previous !== undefined) process.env.JINSHUJU_ACCESS_TOKEN = previous;
 });
+test('成功响应不是完整JSON对象时拒绝，DELETE 204允许空响应',async()=>{
+  for(const body of ['{','', 'null']){
+    const client=new JinshujuClient({accessToken:'fixture',fetchImpl:mockFetch(()=>({body}))});await assert.rejects(client.createForm({}),JinshujuError);
+  }
+  const client=new JinshujuClient({accessToken:'fixture',fetchImpl:mockFetch(()=>({status:204,body:''}))});assert.equal(await client.deleteEntry('form',1),null);
+});
+test('响应头已到达但正文停滞时超时仍然有效',async()=>{
+  const client=new JinshujuClient({accessToken:'fixture',timeoutMs:10,fetchImpl:async(url,{signal})=>({ok:true,status:200,headers:{},text:()=>new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true});})})});
+  await assert.rejects(client.getMe(),/超时或取消/);
+});
+test('重复分页游标被拒绝，不无限读取同一页',async()=>{
+  let calls=0;const client=new JinshujuClient({accessToken:'fixture',fetchImpl:mockFetch(()=>{calls++;return {body:{data:[{serial_number:1}],next:'same'}};})});
+  await assert.rejects(client.listAllEntries('form'),/分页游标重复/);assert.equal(calls,2);
+});
 
 test('getMe 使用 Bearer 鉴权并返回数据', async () => {
   const calls = [];

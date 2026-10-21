@@ -1,13 +1,19 @@
+import {scopedURL, scopeKey} from './lesson-scope.js';
 import { $, esc, api, notice, download, saved, time, originalTranscript, captureView, uploadBlob } from './ui.js';
 import { DEFAULT_AUDIO_LIMITS,validateUpload } from '../src/uploadPolicy.js';
 import {CLASSROOM_TERMINAL_STAGES,textObservations,transcriptText,transcriptLabel} from '../src/classroomShared.js';
 import {createAudioPlayback} from './audio-player.js';
+import {createDraftCache} from './draft-cache.js';
 const SECTIONS = {summary:'统一总结',knowledge:'核心知识点',emphasis:'教学重点',difficulties:'潜在难点（推测）',observations:'表达与时间节奏观察',suggestions:'改进建议'};
 const KINDS = {transcript:'转写归纳','teacher-emphasis':'教师明确强调','ai-inference':'AI 归纳',hypothesis:'推测','timing-estimate':'时间估算'};
 const TIMESTAMPS = {'whisper-word-alignment+vad-offset+chunk-offset':'模型词对齐 · 语音区间与分段偏移','whisper-word-alignment+chunk-offset':'模型词对齐 · 分段偏移','legacy-user-timestamps':'旧记录人工时间'};
 const STAGES = {paused:'已暂停',cancelled:'已取消',queued:'排队中',processing:'音频处理中','loading-model':'加载本地模型',transcribing:'真实转写中',analyzing:'分段分析中',summarizing:'整课汇总中',completed:'已完成',failed:'失败，可重试'};
 let state, recording, stream, recordChunks = [], recordBytes=0, recordBlob = null, recordUrl = '', timer, startedAt, recordFormat = '', pollTimer, lastRevision = -1, dirty = false, saving = false, uploading=null, taskStarting=false, requestingMic=false, limits={...DEFAULT_AUDIO_LIMITS}, recordLimitHit=false;
 const drafts = new Map();
+const draftCache=createDraftCache('audio',{capture:()=>({entries:[...drafts],fields:{'classroom-request':$('classroom-request').value}}),fingerprint:()=>JSON.stringify([state?.audioGeneration,state?.currentTranscriptId,state?.currentReportId,state?.courseVersion,state?.reports.find(r=>r.id===state.currentReportId)?.sections]),apply:record=>{
+  let skipped=0;for(const [key,value]of record.entries){const [kind,id]=key.split(':'),valid=kind==='course'&&['course-title','course-description'].includes(id)||['segment','excluded'].includes(kind)&&transcript()?.segments.some(s=>s.id===id)||kind==='report'&&Object.values(report()?.sections||{}).flat().some(s=>s.id===id);if(!valid){skipped++;continue;}if(!drafts.has(key))drafts.set(key,value);}
+  if(!$('classroom-request').value)$('classroom-request').value=record.fields['classroom-request']||'';render();return {skipped};
+},onError:message=>notice(message,true)});
 let transcriptPage=0,transcriptSearch='',exporting=false,displayedAudioId;
 const PAGE_SIZE=60;
 const playback=createAudioPlayback($('audio-player'),{onLabel:label=>{$('playback-label').textContent=label;$('player-dock').hidden=false;},onError:message=>notice(message,true)});
@@ -20,14 +26,27 @@ const handle = fn => async event => { try { notice(''); await fn(event); } catch
 async function command(action, extra = {}) { return serial(() => saveCommand(action, extra)); }
 async function saveCommand(action, extra = {}) {
   saving = true; $('save-status').textContent = '保存中…';
-  try { state = await api('/api/classroom',{revision:state.revision,action,...extra});
+  try {
+    const before=state,payload={revision:before.revision,action,...extra};let next;
+    try{next=await api('/api/classroom',payload);}
+    catch(error){
+      if(error.status!==409)throw error;
+      const latest=await api('/api/classroom');
+      const content=({revision,savedAt,conversation,...rest})=>JSON.stringify(rest);
+      // A discussion reply may arrive at the server before its HTTP response
+      // reaches this page. Retry only if that is the sole intervening change.
+      if(content(latest)!==content(before))throw error;
+      if(latest.revision>=state.revision)state=latest;
+      next=await api('/api/classroom',{...payload,revision:latest.revision});
+    }
+    if(next.revision>=state.revision)state=next;
     if(action==='reportItem'&&extra.delete)drafts.delete('report:'+extra.itemId);
     for(const [key,value] of drafts) if(action==='clear'||draftMatchesSaved(key,value)) drafts.delete(key);
     dirty=drafts.size>0; render(); }
   catch (error) { $('save-status').textContent='保存失败 · 输入保留，请重试'; throw error; }
   finally { saving = false; }
 }
-function audioUrl(audio) { return '/api/classroom/audio?id='+encodeURIComponent(audio.id); }
+function audioUrl(audio) { return scopedURL('/api/classroom/audio?id='+encodeURIComponent(audio.id)); }
 function draftMatchesSaved(key,value){
   const [kind,id]=key.split(':');
   const text=kind==='excluded'?Boolean(transcript()?.segments.find(s=>s.id===id)?.excluded):kind==='course'?state.course[id==='course-title'?'title':'description']:kind==='segment'?transcript()?.segments.find(s=>s.id===id)?.text:Object.values(report()?.sections||{}).flat().find(item=>item.id===id)?.text;
@@ -76,7 +95,7 @@ function render() {
   });
   document.querySelectorAll('[data-exclude]').forEach(el=>{const key='excluded:'+el.dataset.exclude,baseline=Boolean(t.segments.find(s=>s.id===el.dataset.exclude)?.excluded);el.checked=drafts.has(key)?drafts.get(key):baseline;el.onchange=()=>{if(el.checked===baseline)drafts.delete(key);else drafts.set(key,el.checked);dirty=drafts.size>0;el.closest('.transcript-row').classList.toggle('excluded',el.checked);$('save-status').textContent=dirty?'有未保存修改':'已保存';renderFullTranscript();};});
   if(drafts.size){dirty=true;$('save-status').textContent='有未保存修改';}
-  restoreView();updateControls();
+  restoreView();updateControls();draftCache.save();
 }
 function renderTranscript(t,original){
   const all=t?.segments||[],filtered=all.filter(s=>(drafts.get('segment:'+s.id)??s.text).toLowerCase().includes(transcriptSearch.toLowerCase()));
@@ -201,7 +220,7 @@ async function saveReportEdits(){
 $('export-report').onclick=handle(async()=>{
   if(exporting)return;exporting=true;$('export-report').disabled=true;
   try{await saveAllEdits();const revision=state.revision,reportId=report()?.id;
-    const response=await fetch(`/api/classroom/report?revision=${revision}&reportId=${encodeURIComponent(reportId)}`);if(!response.ok)throw new Error((await response.json()).error);
+    const response=await fetch(scopedURL(`/api/classroom/report?revision=${revision}&reportId=${encodeURIComponent(reportId)}`));if(!response.ok)throw new Error((await response.json()).error);
     const text=await response.text();ensureSaved();if(state.revision!==revision||report()?.id!==reportId)throw new Error('报告已变化，请重新导出。');download('课堂音频复盘报告.md',text,'text/markdown;charset=utf-8');
   }finally{exporting=false;$('export-report').disabled=!report();}
 });
@@ -210,7 +229,7 @@ let chatting=false;
 $('classroom-send').onclick=handle(async()=>{
   if(chatting)return;const request=$('classroom-request').value.trim();if(!request)throw new Error('请输入问题或修改要求。');
   chatting=true;$('classroom-send').disabled=true;
-  try{await saveAllEdits();const result=await api('/api/classroom/chat',{revision:state.revision,request});state=result.state;if($('classroom-request').value.trim()===request)$('classroom-request').value='';render();}
+  try{await saveAllEdits();const result=await api('/api/classroom/chat',{revision:state.revision,request});if(result.state.revision>=state.revision)state=result.state;if($('classroom-request').value.trim()===request)$('classroom-request').value='';render();}
   finally{chatting=false;$('classroom-send').disabled=false;}
 });
 $('clear-classroom-conversation').onclick=handle(()=>command('clearConversation'));
@@ -221,10 +240,23 @@ $('restore-report').onclick=handle(async()=>{const [reportId,historyId]=$('repor
 $('transcript-search').oninput=()=>{transcriptSearch=$('transcript-search').value.trim();transcriptPage=0;render();};
 $('transcript-prev').onclick=()=>{transcriptPage--;render();};$('transcript-next').onclick=()=>{transcriptPage++;render();};
 $('jump-transcript').onclick=handle(()=>{const raw=$('transcript-time').value.trim();if(!/^\d+(?::[0-5]?\d){0,2}$/.test(raw))throw new Error('请输入时间，如12:30或1:12:30。');const seconds=raw.split(':').reduce((n,v)=>n*60+Number(v),0),t=transcript();if(!t)throw new Error('尚无转写。');transcriptSearch='';$('transcript-search').value='';const i=t.segments.findIndex(s=>s.end>=seconds);if(i<0)throw new Error('时间超出转写范围。');transcriptPage=Math.floor(i/PAGE_SIZE);render();document.querySelector(`[data-segment="${t.segments[i].id}"]`)?.scrollIntoView({block:'center'});});
+let pollController=null,pollGeneration=0,pageActive=true;
 async function poll(){
-  try{if(!saving && !uploading && !taskStarting && (active('transcribe')||active('analysis'))){const revision=state.revision,next=await api('/api/classroom');if(!saving && !uploading && !taskStarting && revision===state.revision && next.revision>state.revision){state=next;render();}}}catch(e){notice('任务状态读取失败，已有编辑保留：'+e.message,true);}finally{pollTimer=setTimeout(poll,1600);}
+  const generation=pollGeneration;let controller,timeout;clearTimeout(pollTimer);if(!pageActive||pollController)return;
+  try{
+    if(!saving&&!uploading&&!taskStarting&&(active('transcribe')||active('analysis'))){
+      const revision=state.revision;controller=new AbortController();pollController=controller;timeout=setTimeout(()=>controller.abort('timeout'),15000);
+      const next=await api('/api/classroom?since='+revision,undefined,{signal:controller.signal});
+      if(generation===pollGeneration&&pageActive&&!controller.signal.aborted&&!saving&&!uploading&&!taskStarting&&revision===state.revision&&!next.unchanged&&next.revision>state.revision){state=next;render();}
+    }
+  }catch(e){if(pageActive&&generation===pollGeneration)notice(controller?.signal.reason==='timeout'?'任务状态读取超时，正在重新连接；已有编辑保留。':'任务状态读取失败，已有编辑保留：'+e.message,true);}
+  finally{clearTimeout(timeout);if(pollController===controller)pollController=null;if(generation===pollGeneration&&pageActive)pollTimer=setTimeout(poll,1600);}
 }
-window.addEventListener('beforeunload',e=>{if(uploading||recording||recordBlob&& !$('save-recording').hidden||dirty){e.preventDefault();e.returnValue='';}});
-window.addEventListener('pagehide',()=>{stopTracks();clearTimeout(pollTimer);if(recordUrl)URL.revokeObjectURL(recordUrl);});
-try{state=await api('/api/classroom');render();poll();}catch(e){$('save-status').textContent='恢复失败';notice(e.message,true);}
+function stopPoll(){pageActive=false;pollGeneration++;clearTimeout(pollTimer);pollController?.abort();pollController=null;}
+function startPoll(){stopPoll();pageActive=true;void poll();}
+window.addEventListener('beforeunload',e=>{if(uploading||recording||recordBlob&& !$('save-recording').hidden||dirty||chatting||$('classroom-request').value.trim()){e.preventDefault();e.returnValue='';}});
+window.addEventListener('pagehide',()=>{stopTracks();stopPoll();playback.clear();if(recordUrl){URL.revokeObjectURL(recordUrl);recordUrl='';}});
+window.addEventListener('pageshow',event=>{if(event.persisted&&state){if(recordBlob&&!recordUrl){recordUrl=URL.createObjectURL(recordBlob);$('record-playback').src=recordUrl;}startPoll();}});
+document.addEventListener('visibilitychange',()=>{if(!state)return;if(document.hidden)stopPoll();else startPoll();});
+try{state=await api('/api/classroom');await draftCache.restore();render();startPoll();}catch(e){$('save-status').textContent='恢复失败';notice(e.message,true);}
 try{const status=await api('/api/status');limits=status.audioLimits||{...limits,maxBytes:status.audioMaxBytes||limits.maxBytes};$('audio-limits').textContent=`最多 ${Number((limits.maxBytes/1024/1024).toFixed(2))} MiB、${Number((limits.maxSeconds/3600).toFixed(2))} 小时；需有可解码音轨，内容应与扩展名一致，不接受课堂视频。转写在本机进行。`;}catch(e){notice('音频限制读取失败，请刷新后重试：'+e.message,true);}

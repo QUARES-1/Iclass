@@ -1,7 +1,7 @@
-import { $, api, notice } from './ui.js';
+import { $, api, notice, announceConnectionSettings } from './ui.js';
 
 let settings, busy = false, dirty = false;
-const promptKeys = ['agent','preparation', 'materials', 'classroom', 'outline'];
+const promptKeys = ['agent','preparation', 'materials', 'classroom', 'outline', 'feedback', 'feedbackSummary', 'feedbackSuggestions'];
 function changed() { dirty = true; $('save-status').textContent = '有未保存配置'; $('test-result').textContent = '配置已修改，尚未测试当前内容。'; }
 function render() {
   $('base-url').value = settings.baseUrl; $('model').value = settings.model;
@@ -30,7 +30,7 @@ $('model-form').oninput = changed;
 $('model-form').onsubmit = event => {
   event.preventDefault();
   const patch = payload();
-  void run(async () => { $('save-status').textContent = '正在保存…'; settings = await api('/api/model-settings', patch); render(); $('test-result').textContent = '配置已保存；下一次 AI 请求会使用这份配置。'; notice('模型与提示词已保存并生效。'); });
+  void run(async () => { $('save-status').textContent = '正在保存…'; settings = await api('/api/model-settings', patch); render(); announceConnectionSettings('model', settings); $('test-result').textContent = '配置已保存；下一次 AI 请求会使用这份配置。'; notice('模型与提示词已保存并生效。'); });
 };
 $('test-model').onclick = () => {
   if (!$('model-form').reportValidity()) return;

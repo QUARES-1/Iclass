@@ -10,6 +10,15 @@ import { analyzeClassroom } from '../src/analysis.js';
 import { analyzeMaterialsWithLLM, generateOutlineWithLLM } from '../src/llm.js';
 import { emptyWorkspace } from '../src/workspace.js';
 
+test('只含空白的初始密钥应触发配置引导，公开状态不包含密钥', () => {
+  const settings = new ModelSettings('/unused', {});
+  for (const apiKey of ['', '   ', '\t\n']) {
+    const visible = settings.public({...environmentSettings({}), apiKey});
+    assert.equal(visible.apiKeyConfigured, false);
+    assert.equal(visible.apiKey, undefined);
+  }
+});
+
 test('设置保存后重建服务可恢复，密钥不回显，留空保留、替换与显式清除生效', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'model-settings-'));
   const env = { LLM_API_KEY: 'environment-secret', LLM_BASE_URL: 'https://old.example/v1', LLM_MODEL: 'old-model' };

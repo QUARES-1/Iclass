@@ -36,6 +36,7 @@ export class JinshujuClient {
     this.baseUrl = (options.baseUrl ?? process.env.JINSHUJU_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 20000;
+    this.signal = options.signal;
   }
 
   get headers() {
@@ -52,44 +53,28 @@ export class JinshujuClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    let response;
     try {
-      response = await this.fetchImpl(url.toString(), {
-        method,
-        headers: this.headers,
+      const response = await this.fetchImpl(url.toString(), {
+        method, headers: this.headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
+        signal: this.signal ? AbortSignal.any([controller.signal, this.signal]) : controller.signal,
       });
-    } catch (error) {
-      if (error && error.name === 'AbortError') {
-        throw new JinshujuError(`请求超时（${this.timeoutMs}ms）`, { method, url: url.toString(), cause: error });
+      const raw = await response.text();
+      let data;
+      try { data = raw ? JSON.parse(raw) : null; }
+      catch { throw new JinshujuError('服务返回了无法解析的内容。', {status:response.status,method,url:url.toString()}); }
+      if (!response.ok) {
+        throw new JinshujuError('金数据 API 返回 '+response.status+'：'+(data?.error_description || data?.error || '请求未成功'), {
+          status:response.status,body:data,method,url:url.toString(),
+        });
       }
-      throw new JinshujuError(`网络请求失败：${error.message}`, { method, url: url.toString(), cause: error });
-    } finally {
-      clearTimeout(timer);
-    }
-
-    const text = await response.text();
-    let data = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = null;
-      }
-    }
-
-    if (!response.ok) {
-      const description = data?.error_description || data?.error || (data ? JSON.stringify(data) : text);
-      throw new JinshujuError(`金数据 API 返回 ${response.status}：${description}`, {
-        status: response.status,
-        body: data,
-        method,
-        url: url.toString(),
-      });
-    }
-
-    return { status: response.status, data, headers: response.headers };
+      if((!data || typeof data !== 'object')&&!(method==='DELETE'&&response.status===204))throw new JinshujuError('服务返回的数据结构无效。',{method,url:url.toString()});
+      return {status:response.status,data,headers:response.headers};
+    } catch(error) {
+      if(error instanceof JinshujuError)throw error;
+      if(controller.signal.aborted || this.signal?.aborted)throw new JinshujuError('请求已超时或取消。',{method,url:url.toString(),cause:error});
+      throw new JinshujuError('网络请求失败，请检查连接。',{method,url:url.toString(),cause:error});
+    } finally { clearTimeout(timer); }
   }
 
   async getMe() {
@@ -102,8 +87,9 @@ export class JinshujuClient {
 
   async listAllForms(params = {}) {
     const results = [];
-    let next = params.next;
+    let next = params.next; const seen = new Set();
     for (;;) {
+      const cursor=JSON.stringify(next??null); if(seen.has(cursor))throw new JinshujuError("分页游标重复，已停止请求。");seen.add(cursor);
       const page = await this.listForms({ ...params, next });
       results.push(...(page.data || []));
       if (!page.next || (page.data || []).length === 0) break;
@@ -134,8 +120,9 @@ export class JinshujuClient {
 
   async listAllEntries(formToken, params = {}) {
     const results = [];
-    let next = params.next;
+    let next = params.next; const seen = new Set();
     for (;;) {
+      const cursor=JSON.stringify(next??null); if(seen.has(cursor))throw new JinshujuError("分页游标重复，已停止请求。");seen.add(cursor);
       const page = await this.listEntries(formToken, { ...params, next });
       results.push(...(page.data || []));
       if (page.next === null || page.next === undefined || (page.data || []).length === 0) break;

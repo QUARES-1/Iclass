@@ -30,7 +30,7 @@ test('删除未保存结论不会遗留脏状态，历史恢复拿回删除前�
 });
 test('翻页与搜索保留未保存校正，排除误识别不改变原稿与时间',async({page,request})=>{
   await fixture(request,125);await page.goto('/public/sprint2.html');await page.locator('#transcript-panel > summary').click();await expect(page.locator('[data-segment]')).toHaveCount(60);await page.locator('[data-segment=seg-0]').fill('老师修正术语');await page.locator('#transcript-next').click();await page.locator('[data-segment=seg-60]').fill('第二页的修订');
-  await page.locator('#transcript-search').fill('老师修正');await expect(page.locator('[data-segment]')).toHaveCount(1);await expect(page.locator('[data-segment]')).toHaveValue('老师修正术语');await page.locator('[data-exclude=seg-0]').check();await page.locator('#save-transcript').click();
+  await page.locator('#transcript-search').fill('老师修正');await expect(page.locator('[data-segment]')).toHaveCount(1);await expect(page.locator('[data-segment]')).toHaveValue('老师修正术语');await page.locator('[data-exclude=seg-0]').check();await page.locator('#save-transcript').click();await expect(page.locator('#save-status')).toContainText('已保存');
   const saved=await(await request.get('/api/classroom')).json(),t=saved.transcriptVersions.at(-1);expect(t.segments[0].excluded).toBe(true);expect(t.segments[60].text).toBe('第二页的修订');expect(t.segments[0].start).toBe(0);expect(saved.transcriptVersions[0].segments[0].text).toBe('教学片段0');
   await page.locator('#transcript-time').fill('00:12');await page.locator('#jump-transcript').click();await expect(page.locator('#transcript-page-meta')).toContainText('121—125');
 });

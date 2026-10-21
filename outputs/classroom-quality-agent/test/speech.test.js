@@ -2,8 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import os from 'node:os';
 import {speechCommand} from '../src/speech.js';
 import {pythonExecutable,pythonEnvironment} from '../src/python.js';
+
+async function workerFixture(source,run){
+  const root=await mkdtemp(path.join(os.tmpdir(),'speech-events-')),previous=process.env.PYTHON_BIN;
+  await mkdir(path.join(root,'speech'));await writeFile(path.join(root,'speech/worker.py'),source);process.env.PYTHON_BIN=process.execPath;
+  try{await run(root);}finally{if(previous===undefined)delete process.env.PYTHON_BIN;else process.env.PYTHON_BIN=previous;await rm(root,{recursive:true,force:true});}
+}
+test('语音进程连续四千条事件逐条写入，保持顺序且不堆积异步进度任务',async()=>{
+  await workerFixture(`for(let i=0;i<4000;i++)process.stdout.write(JSON.stringify({stage:'chunk-complete',index:i})+'\\n');process.stdout.write(JSON.stringify({result:{text:'课堂语音😀'}})+'\\n');`,async root=>{
+    let active=0,peak=0,count=0;
+    const result=await speechCommand(root,'probe','unused',async event=>{active++;peak=Math.max(active,peak);await new Promise(r=>setImmediate(r));if(event.index!==undefined)assert.equal(event.index,count++);active--;});
+    assert.equal(count,4000);assert.equal(peak,1);assert.equal(active,0);assert.equal(result.text,'课堂语音😀');
+  });
+});
+test('语音事件保存失败向上传递，不能吞掉同步回调异常并报告完成',async()=>{
+  await workerFixture(`console.log(JSON.stringify({stage:'processing'}));console.log(JSON.stringify({result:{text:'完成'}}));`,async root=>{
+    await assert.rejects(speechCommand(root,'probe','unused',()=>{throw new Error('fixture progress write failed');}),/fixture progress write failed/);
+  });
+});
 
 test('解释器按平台查找虚拟环境，保留显式配置和系统回退',()=>{
   for(const platform of ['win32','darwin','linux']){

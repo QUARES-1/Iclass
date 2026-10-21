@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>课堂音频复盘 · 爱教学</title><link rel="stylesheet" href="./workbench.css"><link rel="stylesheet" href="./calm.css"><link rel="stylesheet" href="./audio.css"></head><body>
-<header><a class="brand" href="./home.html">爱教学 <span>课堂音频复盘</span></a><nav><a href="./settings.html" target="_blank" rel="noopener">模型与提示词设置</a><a href="./index.html">教学资源工作台 →</a><span id="save-status" role="status">正在恢复…</span></nav></header><div id="notice" role="alert" hidden></div>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>课堂音频复盘 · 爱教学</title><link rel="stylesheet" href="./workbench.css"><link rel="stylesheet" href="./calm.css"><link rel="stylesheet" href="./audio.css"><link rel="stylesheet" href="./api-setup.css"><link rel="stylesheet" href="./courses.css"></head><body>
+<header><a class="brand" href="./home.html">爱教学 <span>课堂音频复盘</span></a><nav><a href="./settings.html" target="_blank" rel="noopener">模型与提示词设置</a><a href="./index.html">教学资源工作台 →</a><span id="save-status" role="status">正在恢复…</span><a href="./sprint3.html">课后反馈</a></nav></header><div id="notice" role="alert" hidden></div>
 <main class="audio-layout">
 <aside class="panel audio-input"><h2>课堂录音</h2><p class="muted">本页独立保存课程与录音。分析整段课堂，不区分全部说话人。</p>
 <details id="course-options"><summary>课程说明</summary><label>课程名称<input id="course-title" maxlength="500" placeholder="本次课堂的课程名称"></label><label>课程说明<textarea id="course-description" rows="4" maxlength="8000" placeholder="课程主题、授课对象与希望复盘的问题"></textarea></label><button id="save-course">保存课程说明</button></details>
@@ -16,4 +16,4 @@
 <details id="classroom-discussion"><summary>讨论或调整这份复盘</summary><div id="classroom-messages" aria-live="polite"></div><label>你的问题或修改要求<textarea id="classroom-request" rows="3" maxlength="2000" placeholder="例如：为什么建议缩短开场？或：把第二条建议改得具体一些。"></textarea></label><div class="actions"><button id="classroom-send">发送</button><button id="clear-classroom-conversation" class="quiet">清空讨论上下文</button></div></details>
 </section></main>
 <div id="player-dock" hidden><div><strong id="playback-label">课堂录音</strong><button id="play-full">播放整段</button></div><audio id="audio-player" class="audio-player" controls hidden></audio></div>
-<script type="module" src="./sprint2.js"></script></body></html>
+<script type="module" src="./sprint2.js"></script><script type="module" src="./api-setup.js"></script><script type="module" src="./course-context.js"></script></body></html>

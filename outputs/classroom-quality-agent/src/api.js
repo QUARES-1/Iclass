@@ -19,22 +19,37 @@ import { ModelSettings, validateModelSettings } from './modelSettings.js';
 import { newAgentJob, runTeachingAgent, publicAgentJob, commitAgentDrafts, checkAgentBase } from './agent.js';
 import {checkCodeSyntax} from './codeCheck.js';
 import {classroomConversation} from './classroomConversation.js';
+import {createFeedbackApi} from './feedbackApi.js';
+import {createHash} from 'node:crypto';
+import {StorageManager} from './storageManager.js';
+import {reserveDisk,invalidateUsage} from './storageQuota.js';
+import {CourseService} from './courses.js';
 
-export const json = (res, data, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(data)); };
+export const json = (res, data, status = 200) => {if(res.recoveryNotices?.size)res.setHeader('X-Data-Recovery','previous-save-restored');res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(data)); };
 export async function bodyJSON(req) {
   const chunks = []; let bytes = 0;
   for await (const chunk of req) { bytes += chunk.length; if (bytes > 6 * 1024 * 1024) throw new AppError('请求内容超过 6 MB。', 413); chunks.push(chunk); }
-  try { return JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { throw new AppError('请求体不是有效的 JSON。', 400); }
+  let body;
+  try { body = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)) || '{}'); } catch { throw new AppError('请求体不是有效的 JSON。', 400); }
+  if(!body || typeof body!=='object' || Array.isArray(body))throw new AppError('请求体必须是 JSON 对象。',400);
+  return body;
 }
-export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(root, 'data'), modelCall = requestJSON, speechCall = (...args) => speechCommand(root, ...args), runtimeCheck = checkActivityRuntime, modelSettings = new ModelSettings(dataDir) } = {}) {
+function requireRevision(body){if(!Number.isSafeInteger(body.revision)||body.revision<0)throw new AppError('需要有效的内容版本，请刷新后重试。',400);}
+function createLessonApi(root, { dataDir = process.env.DATA_DIR || path.join(root, 'data'), modelCall = requestJSON, speechCall = (...args) => speechCommand(root, ...args), runtimeCheck = checkActivityRuntime, modelSettings = new ModelSettings(dataDir), feedbackClientFactory, feedbackRateLimit, settingsStore, lessonContext } = {}) {
   const store = new Store(dataDir), audioDir = path.join(store.root, 'audio');
+  const feedbackApi = createFeedbackApi({store,settingsStore,lessonContext,modelSettings,modelCall,clientFactory:feedbackClientFactory,feedbackRateLimit,json,bodyJSON});
   const agentRuns = new Map();
-  const classroomRuns = new Map(), pendingAudio = new Set();
+  const storage=new StorageManager(store);
+  let maintenanceBusy=false,inflightMutations=0;
+  const classroomRuns = new Map(), pendingAudio = new Set(), classroomChats = new Set();
   const activeClassJob=j=>!CLASSROOM_TERMINAL_STAGES.includes(j.stage);
   let speechQueue = Promise.resolve();
   const ws = () => store.read('workspace', emptyWorkspace());
   const classroom = async () => migrateClassroom(await store.read('classroom', emptyClassroom()));
-  const saveClass = (revision, change) => store.update('classroom', revision, emptyClassroom(), async raw => change(migrateClassroom(raw)));
+  const saveClass = async (revision, change) => migrateClassroom(await store.update('classroom', revision, emptyClassroom(), async raw => {
+    const current=migrateClassroom(raw),before=JSON.stringify(current),next=await change(current);
+    return JSON.stringify(next)===before?raw:next;
+  },{skipUnchanged:true}));
   let ready;
   const recoverInterrupted = async () => {
     const s = await classroom();
@@ -42,7 +57,7 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     const w = await ws();
     const recoveries = new Map();
     for (const m of w.messages.filter(m => m.role === 'user' && m.jobId)) {
-      const job = await store.read('agent-' + m.jobId, null);
+      const job = await readAgentJob(m.jobId);
       if (job && !['completed','failed','paused'].includes(job.stage)) {
         job.stage = m.status === 'complete' ? 'completed' : 'paused'; job.detail = '服务重启，任务草稿已保留，可以继续。';
         await saveAgentJob(job); recoveries.set(m.id, job.stage);
@@ -51,8 +66,18 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     if (w.messages.some(m => m.status === 'processing')) await store.update('workspace', undefined, emptyWorkspace(), c => { c.messages.forEach(m => { if (m.status === 'processing') { m.status = m.jobId ? recoveries.get(m.id) === 'completed' ? 'complete' : 'paused' : 'failed'; m.error = m.jobId ? '服务重启，已完成草稿保留，可继续任务。' : '服务重启，请重试。'; } }); return c; });
   };
   async function saveAgentJob(job) {
-    const saved = await store.update('agent-' + job.id, undefined, job, () => clone(job));
+    if(job.input&&!job.inputRef){
+      const {messages,revision,savedAt,...context}=job.input,ref='teaching-input-'+createHash('sha256').update(JSON.stringify(context)).digest('hex');
+      await store.update(ref,undefined,{revision:0},c=>c.value?c:{revision:0,value:context},{skipUnchanged:true});job.inputRef=ref;job.conversationSnapshot=messages;
+    }
+    const {input,...record}=job;
+    const saved = await store.update('agent-' + job.id, undefined, record, () => clone(record));
     job.revision = saved.revision; job.savedAt = saved.savedAt; return saved;
+  }
+  async function readAgentJob(jobId){
+    const job=await store.read('agent-'+jobId,null);
+    if(job?.inputRef){const snapshot=await store.read(job.inputRef,null);if(!snapshot?.value)throw new AppError('任务资料快照缺失，请保留数据并从归档恢复。',503);job.input={...snapshot.value,messages:job.conversationSnapshot??snapshot.value.messages??[]};}
+    return job;
   }
   async function readAgentContext(kind, jobId, excludeId) {
     const state = await ws();
@@ -111,6 +136,7 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     });
   }
   async function executeAgent(job, controller) {
+    let committed=false;
     try {
       const config = await modelSettings.read(); job.configRevision = config.revision; job.model = config.model;
       const candidate = await runTeachingAgent(job, { config, call: modelCall, runtimeCheck, codeCheck:checkCodeSyntax,checkpoint: saveAgentJob,
@@ -119,11 +145,18 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       const conversational = ['reply','advice','clarify'].includes(candidate.action);
       job.stage = 'committing'; job.detail = conversational ? '正在保存回复' : '检查通过，保存新版本'; await saveAgentJob(job);
       await finishCandidate(job, candidate, controller.signal);
+      committed=true;
       job.stage = 'completed'; job.detail = conversational ? '已回复' : '成果已保存，请检查并确认。'; job.finishedAt = new Date().toISOString(); delete job.error; await saveAgentJob(job);
     } catch (error) {
+      if(committed){
+        // The workspace is the commit receipt. A failed progress write must
+        // never turn a saved result into a retryable task that commits twice.
+        job.stage='completed';delete job.error;await saveAgentJob(job).catch(()=>{});return;
+      }
       job.stage = controller.signal.aborted || error.code === 'AGENT_PAUSED' ? 'paused' : 'failed'; job.error = error.message; job.detail = job.mode === 'conversation' ? '本轮对话已停止，可重试' : job.stage === 'paused' ? '任务已暂停，草稿保留' : '任务暂未完成，草稿保留';
-      await saveAgentJob(job);
-      await store.update('workspace', undefined, emptyWorkspace(), c => { const m = c.messages.find(m => m.id === job.messageId); if (m) { m.status = job.stage; m.error = error.message; } return c; });
+      try{await saveAgentJob(job);}finally{
+        await store.update('workspace', undefined, emptyWorkspace(), c => { const m = c.messages.find(m => m.id === job.messageId); if (m) { m.status = job.stage; m.error = error.message; } return c; },{skipUnchanged:true});
+      }
     } finally { agentRuns.delete(job.id); }
   }
   function launchAgent(job) { const controller = new AbortController(); agentRuns.set(job.id, controller); void executeAgent(job, controller).catch(() => agentRuns.delete(job.id)); }
@@ -180,17 +213,20 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
         const job = c.jobs.find(j => j.id === jobId);
         Object.assign(job, { stage: 'completed', resultId: r.id, completedParts:job.totalParts }); delete job.error; return c;
       });
-      await rm(store.file(progressKey(jobId)),{force:true});
+      await store.remove(progressKey(jobId));
     } catch (error) { if(!signal.aborted)await updateJob(jobId, { stage: 'failed', error: error.message }); }
   }
   async function cleanupAudioFiles(){
     await store.update('classroom',undefined,emptyClassroom(),async raw=>{
       const c=migrateClassroom(raw), keep=new Set(pendingAudio);
+      const archives=await store.read('storage-archives',{revision:0,items:[]});for(const archive of archives.items)for(const file of archive.audioFiles||[])keep.add(file);
+      for(const file of await storage.audioPins())keep.add(file);
       const audios=[c.audio,...c.transcriptVersions.map(t=>t.audio),...c.jobs.filter(j=>j.input&&!['cancelled','completed'].includes(j.stage)).map(j=>j.audio)];
       for(const a of audios)if(a&&!a.deleted){keep.add(a.file);if(a.playbackFile)keep.add(a.playbackFile);}
-      for(const file of await readdir(audioDir).catch(()=>[]))if(/^[a-f0-9-]+(?:\.(?:wav|mp3|m4a|webm|ogg)|\.play\.mp3)$/.test(file)&&!keep.has(file))await rm(path.join(audioDir,file),{force:true});
+      for(const file of await readdir(audioDir).catch(()=>[]))if(/^[a-f0-9-]+(?:\.(?:wav|mp3|m4a|webm|ogg)|\.play\.mp3)$/.test(file)&&!keep.has(file)&&!pendingAudio.has(file))await rm(path.join(audioDir,file),{force:true});
       return raw;
     },{skipUnchanged:true});
+    invalidateUsage(store.root);
   }
   async function uploadAudio(req, url, res) {
     const name = url.searchParams.get('name') || '', extension = path.extname(name).toLowerCase();
@@ -202,12 +238,13 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     if(!revisionText || !/^\d+$/.test(revisionText)||Number(revisionText)!==before.revision){req.resume();throw new AppError('课堂记录已更新或版本参数无效，请刷新后重试；未替换录音。',409);}
     if(before.jobs.some(activeClassJob)){req.resume();throw new AppError('任务进行中，请先暂停再更换录音。',409);}
     if (Number(req.headers['content-length']) > maxBytes) { req.resume(); throw new AppError(`音频超过 ${Number((maxBytes/1024/1024).toFixed(2))} MiB 上传限制。`, 413); }
-    await mkdir(audioDir, { recursive: true });
+    const expected=Number(req.headers['content-length']),releaseSpace=await reserveDisk(store.root,2*(Number.isFinite(expected)&&expected>0?Math.min(expected,maxBytes):maxBytes));let stored=false;
     let bytes = 0;
     const uploadController=new AbortController(),abortUpload=()=>{if(!res.writableEnded)uploadController.abort();};
     req.once('aborted',abortUpload);res.once('close',abortUpload);
     pendingAudio.add(file);pendingAudio.add(playbackFile);
     try {
+      await mkdir(audioDir,{recursive:true});
       // Drain a chunked oversized request while keeping disk use bounded.
       // Throwing inside pipeline destroys the HTTP socket before it can return
       // the useful 413 response to the client.
@@ -227,16 +264,16 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       const result = await saveClass(undefined, c => {
         if(req.aborted || res.destroyed)throw new AppError('上传已取消，未替换原录音。',499);
         if(c.audioGeneration!==before.audioGeneration || c.audio?.id!==before.audio?.id || c.currentTranscriptId!==before.currentTranscriptId)throw new AppError('上传期间录音或转写已更新，未覆盖原成果，请重试。',409);
-        if (c.jobs.some(j => ['queued','processing','transcribing','loading-model'].includes(j.stage) && j.type === 'transcribe')) throw new AppError('转写进行中，完成后再更换录音。', 409);
+        if (hasClassroomTask(c)) throw new AppError('任务进行中，请先暂停再更换录音。', 409);
         c.audio = { id: audioId, file, name: path.basename(name), bytes, ...metadata, source: url.searchParams.get('source') === 'recording' ? 'recording' : 'upload', createdAt: new Date().toISOString() };
         c.currentTranscriptId = null;c.audioGeneration++; invalidateReports(c); return c;
       });
-      json(res, result);
+      stored=true;json(res, result);
       await cleanupAudioFiles().catch(()=>{});
     } catch (error) { await rm(target, { force: true });await rm(path.join(audioDir,playbackFile),{force:true}); throw error; }
-    finally { req.removeListener('aborted',abortUpload);res.removeListener('close',abortUpload);pendingAudio.delete(file);pendingAudio.delete(playbackFile);await rm(temp, { force: true }); }
+    finally { req.removeListener('aborted',abortUpload);res.removeListener('close',abortUpload);pendingAudio.delete(file);pendingAudio.delete(playbackFile);await rm(temp, { force: true });if(stored){const extra=await stat(path.join(audioDir,playbackFile)).catch(()=>null);releaseSpace(bytes+(extra?.size||0));}else releaseSpace(); }
   }
-  return async function api(req, res, url) {
+  const route=async function api(req, res, url) {
     if (!url.pathname.startsWith('/api/')) return false;
     // Importing the module or failing to bind a port must not modify live data.
     // Recovery begins only once this server receives an actual API request.
@@ -245,6 +282,7 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     // A foreign web page cannot mutate a loopback app or spend its model key.
     const origin = req.headers.origin;
     if (origin && origin !== `http://${req.headers.host}`) throw new AppError('拒绝外部来源请求。', 403);
+    try { if (await feedbackApi(req,res,url)) return true; } catch(error) { if(error instanceof AppError||error.statusCode===413)throw error;throw new AppError('问卷操作未完成，请检查连接、输入或权限后重试。',502); }
     const p = url.pathname;
     if (p === '/api/model-settings' && req.method === 'GET') { json(res, modelSettings.public(await modelSettings.read())); return true; }
     if (p === '/api/model-settings' && req.method === 'POST') { json(res, modelSettings.public(await modelSettings.save(await bodyJSON(req)))); return true; }
@@ -255,22 +293,24 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       await modelCall('连接测试：仅返回 JSON {"ok":true}。', { task: 'connection-test' }, config);
       json(res, { ok: true, model: config.model, elapsedMs: Date.now() - started }); return true;
     }
-    if (req.method === 'GET' && p === '/api/status') { const limits=audioLimits(process.env), config=await modelSettings.read();json(res, { teachingAgent: 'conversation-tools', contextStrategy:'bounded-readback',classroomEvaluation:'overview-on-demand',textModelConfigured: Boolean(config.apiKey), model:config.model, maxInputChars:config.maxInputChars, speech: 'local-python', audioMaxBytes: limits.maxBytes,audioLimits:limits }); return true; }
+    if (req.method === 'GET' && p === '/api/status') { const limits=audioLimits(process.env), config=await modelSettings.read();json(res, { teachingAgent: 'conversation-tools', contextStrategy:'bounded-readback',classroomEvaluation:'overview-on-demand',textModelConfigured: typeof config.apiKey==='string'&&Boolean(config.apiKey.trim()), model:config.model, maxInputChars:config.maxInputChars, speech: 'local-python', audioMaxBytes: limits.maxBytes,audioLimits:limits }); return true; }
     if (p === '/api/workspace/agent' && req.method === 'POST') {
       const b = await bodyJSON(req);
       if (typeof b.request !== 'string' || !b.request.trim() || b.request.length > 10000 || !Number.isSafeInteger(b.revision)) throw new AppError('请输入有效的消息。', 400);
-      let job;
-      const state = await store.update('workspace', b.revision, emptyWorkspace(), c => {
+      let job,state,prepared=false;
+      try { state = await store.update('workspace', b.revision, emptyWorkspace(), async c => {
         if (c.messages.some(m => m.status === 'processing' && m.mode !== 'task')) throw new AppError('上一轮消息正在回应，请稍候再发送。', 409);
         if (b.resourceId && currentVersion(findResource(c, b.resourceId)).id !== b.baseVersionId) throw new AppError('资源版本已变化，请刷新后重试。', 409);
         job = newAgentJob(c, b.request, b.resourceId, b.pageId); job.messageId = id();
+        await saveAgentJob(job);prepared=true;
         c.messages.push({ id: job.messageId, jobId: job.id, role: 'user', text: b.request, status: 'processing', mode:'conversation', resourceId: b.resourceId || null, baseVersionId: b.baseVersionId || null }); return c;
-      });
-      await saveAgentJob(job); launchAgent(job); json(res, { workspace: state, job: publicAgentJob(job) }, 202); return true;
+      }); } catch(error) {if(prepared)await store.remove('agent-'+job.id);throw error;}
+      launchAgent(job); json(res, { workspace: state, job: publicAgentJob(job) }, 202); return true;
     }
     const agentRoute = p.match(/^\/api\/workspace\/agent\/([a-f0-9-]{36})(?:\/(pause|resume|draft))?$/);
     if (agentRoute) {
-      const job = await store.read('agent-' + agentRoute[1], null); if (!job) throw new AppError('任务不存在。', 404);
+      const job = await readAgentJob(agentRoute[1]); if (!job) throw new AppError('任务不存在。', 404);
+      if(job.stage==='committing'&&(await ws()).messages.some(m=>m.id===job.messageId&&m.status==='complete')){job.stage='completed';job.detail=job.mode==='conversation'?'已回复':'成果已保存，请检查并确认。';delete job.error;}
       if (req.method === 'GET' && !agentRoute[2]) { json(res, publicAgentJob(job)); return true; }
       if(req.method==='GET' && agentRoute[2]==='draft'){
         json(res,{job:publicAgentJob(job),resources:job.drafts.map(r=>({id:r.id,name:r.name,type:r.type,content:currentVersion(r).content}))});return true;
@@ -286,14 +326,18 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
         // batch, an explicit resume should reconsider the original message.
         // Jobs with actual progress retain their plan and drafts unchanged.
         const reconsider=!job.mode && job.cursor===0 && !job.drafts.length;
-        const state = await store.update('workspace', undefined, emptyWorkspace(), c => {
+        const original=clone(job);let prepared=false,state;
+        try { state = await store.update('workspace', undefined, emptyWorkspace(), async c => {
           checkAgentBase(c, job);
           if (c.messages.some(m => m.status === 'processing')) throw new AppError('已有任务正在执行，请先暂停。', 409);
           const m = c.messages.find(m => m.id === job.messageId); if (!m) throw new AppError('任务对话已移除，请重新提出要求。', 409);
+          if(m.status==='complete')throw new AppError('任务成果已保存，不能重复提交。',409);
+          if(reconsider){job.mode='conversation';job.plan=null;job.tasks=[];delete job.directCandidate;delete job.pendingCandidate;}
+          job.stage='queued';job.resumedAt=new Date().toISOString();if(job.tasks[job.cursor])job.tasks[job.cursor].attempts=0;delete job.error;
+          await saveAgentJob(job);prepared=true;
           m.status = 'processing'; if(reconsider)m.mode='conversation'; delete m.error; return c;
-        });
-        if(reconsider){job.mode='conversation';job.plan=null;job.tasks=[];delete job.directCandidate;delete job.pendingCandidate;}
-        job.stage = 'queued'; job.resumedAt = new Date().toISOString();if(job.tasks[job.cursor])job.tasks[job.cursor].attempts=0; delete job.error; await saveAgentJob(job); launchAgent(job);
+        }); } catch(error) {if(prepared)await saveAgentJob(original);throw error;}
+        launchAgent(job);
         json(res, { workspace: state, job: publicAgentJob(job) }, 202); return true;
       }
       throw new AppError('任务操作方法无效。', 405);
@@ -301,8 +345,11 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     if (p === '/api/workspace' && req.method === 'GET') { json(res, await ws()); return true; }
     if (p === '/api/workspace' && req.method === 'POST') {
       const b = await bodyJSON(req);
+      requireRevision(b);
       if(b.action==='clearConversation'&&(!Number.isSafeInteger(b.revision)||b.revision<0))throw new AppError('清空上下文需要有效的工作空间版本，请刷新后重试。',400);
-      json(res, await store.update('workspace', b.revision, emptyWorkspace(), c => applyWorkspaceCommand(c, b))); return true;
+      const result=await store.update('workspace', b.revision, emptyWorkspace(), c => applyWorkspaceCommand(c, b));
+      if(['clearConversation','clear'].includes(b.action)&&inflightMutations===1&&!agentRuns.size&&!classroomRuns.size){maintenanceBusy=true;try{await storage.assertIdle();await storage.cleanup();}catch{/* A later manual cleanup can retry. */}finally{maintenanceBusy=false;}}
+      json(res,result);return true;
     }
     if (p === '/api/workspace/sample' && req.method === 'POST') {
       const b = await bodyJSON(req);
@@ -316,13 +363,15 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
         if (b.revision !== before.revision && JSON.stringify(c) !== JSON.stringify(before)) throw new AppError('工作空间已在其他操作中更新，请刷新后重试；本次未更改内容。', 409);
         if (result.removedMaterials || result.removedResources) {
           const backups = path.join(store.root, 'backups'); await mkdir(backups, { recursive: true });
-          await writeFile(path.join(backups, 'workspace-before-sample-dedup-' + id() + '.json'), JSON.stringify(before), { flag: 'wx', mode: 0o600 });
+          const text=JSON.stringify(before),bytes=Buffer.byteLength(text),release=await reserveDisk(store.root,bytes);
+          try{await writeFile(path.join(backups,'workspace-before-sample-dedup-'+id()+'.json'),text,{flag:'wx',mode:0o600});release(bytes);}catch(error){release();throw error;}
         }
         return c;
       }, { skipUnchanged: true })); return true;
     }
     if (p === '/api/workspace/chat' && req.method === 'POST') {
       const b = await bodyJSON(req);
+      requireRevision(b);
       if (typeof b.request !== 'string' || !b.request.trim() || b.request.length > 10000) throw new AppError('请输入有效的生成或修改要求。', 400);
       const messageId = id();
       const base = await store.update('workspace', b.revision, emptyWorkspace(), c => {
@@ -341,17 +390,20 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       }
       return true;
     }
-    if (p === '/api/classroom' && req.method === 'GET') { json(res, await classroom()); return true; }
+    if (p === '/api/classroom' && req.method === 'GET') {
+      const since=url.searchParams.get('since');if(since!==null&&/^\d+$/.test(since)&&Number(since)===await store.revision('classroom',emptyClassroom()))json(res,{unchanged:true,revision:Number(since)});else json(res,await classroom());return true;
+    }
     if (p === '/api/classroom' && req.method === 'POST') {
       const b = await bodyJSON(req), before = await classroom();
+      requireRevision(b);
       const result = await saveClass(b.revision, c => applyClassroomCommand(c, b));
-      if (b.action === 'deleteAudio' && before.audio) {await rm(path.join(audioDir, before.audio.file), { force: true });if(before.audio.playbackFile)await rm(path.join(audioDir,before.audio.playbackFile),{force:true});}
+      if (b.action === 'deleteAudio') await cleanupAudioFiles();
       if (b.action === 'clear') {
-        const runs=[...classroomRuns.values()];runs.forEach(r=>r.controller.abort('cancel'));await Promise.all(runs.map(r=>r.task));
-        await rm(audioDir, { recursive: true, force: true });
-        for(const j of before.jobs){await rm(speechCheckpoint(j.id),{force:true});await rm(store.file(progressKey(j.id)),{force:true});}
+        const runs=before.jobs.map(j=>classroomRuns.get(j.id)).filter(Boolean);runs.forEach(r=>r.controller.abort('cancel'));await Promise.all(runs.map(r=>r.task));
+        await cleanupAudioFiles();
+        for(const j of before.jobs){await rm(speechCheckpoint(j.id),{force:true});await store.remove(progressKey(j.id));}
       }
-      json(res, result); return true;
+      json(res, ['clear','deleteAudio'].includes(b.action)?await classroom():result); return true;
     }
     if (p === '/api/classroom/audio' && req.method === 'POST') { await uploadAudio(req, url, res); return true; }
     if (p === '/api/classroom/audio' && ['GET','HEAD'].includes(req.method)) {
@@ -361,20 +413,23 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       const playback=audio.playbackFile || audio.file;
       if(audio.deleted || !/^[a-f0-9-]+(?:\.(?:wav|mp3|m4a|webm|ogg)|\.play\.mp3)$/.test(playback))throw new AppError('原录音已删除，无法回放。',404);
       const file = path.join(audioDir, playback), info = await stat(file).catch(() => { throw new AppError('原录音已删除，无法回放。', 404); });
+      if(!info.size)throw new AppError('原录音为空，无法回放，请重新上传。',404);
       let start = 0, end = info.size - 1, status = 200;
       if (req.headers.range) {
-        const match = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range);
-        if (!match) throw new AppError('音频范围无效。', 416);
-        start = Number(match[1]); end = match[2] ? Number(match[2]) : end;
-        if (start > end || start >= info.size || end >= info.size) throw new AppError('音频范围超出文件。', 416);
+        const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+        if (!match || !match[1]&&!match[2]) throw new AppError('音频范围无效。', 416);
+        if(match[1]){start=Number(match[1]);end=match[2]?Math.min(Number(match[2]),end):end;}
+        else {const suffix=Number(match[2]);if(!Number.isSafeInteger(suffix)||suffix<=0)throw new AppError('音频范围无效。',416);start=Math.max(0,info.size-suffix);}
+        if (!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start > end || start >= info.size) throw new AppError('音频范围超出文件。', 416);
         status = 206;
       }
       const types = { '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.webm': 'audio/webm', '.ogg': 'audio/ogg' };
       res.writeHead(status, { 'Content-Type': types[path.extname(file)], 'Content-Length': end-start+1, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store', ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${info.size}` } : {}) });
-      if (req.method === 'HEAD') res.end(); else createReadStream(file, { start, end }).pipe(res); return true;
+      if (req.method === 'HEAD') res.end(); else {const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);} return true;
     }
     if (p === '/api/classroom/transcribe' && req.method === 'POST') {
       const b = await bodyJSON(req), jobId = id(); let audio;
+      requireRevision(b);
       const state = await saveClass(b.revision, c => {
         if (!c.audio) throw new AppError('请先上传或停止并保存录音。');
         if (hasClassroomTask(c)) throw new AppError('已有任务，请等待或暂停。', 409);
@@ -387,6 +442,10 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       const b=await bodyJSON(req),before=await classroom();
       if(b.revision!==before.revision)throw new AppError('课堂已变化，请保存最新内容后重试。',409);
       if(typeof b.request!=='string'||!b.request.trim()||b.request.length>2000)throw new AppError('请输入复盘问题，最多2000字。');
+      const generation=before.conversationGeneration;
+      if(classroomChats.has(generation))throw new AppError('上一轮复盘讨论正在回应，请稍候再发送。',409);
+      classroomChats.add(generation);
+      try {
       const config=await modelSettings.read(),decision=await classroomConversation(before,b.request,modelCall,config);let input,job;
       const result=await saveClass(undefined,c=>{
         if(c.conversationGeneration!==before.conversationGeneration)throw new AppError('讨论上下文已清空，本次旧回复已丢弃，请重新发送。',409);
@@ -403,9 +462,11 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
         c.conversation.push({id:id(),role:'user',text:b.request,createdAt:new Date().toISOString()},{id:id(),role:'assistant',text:decision.reply,createdAt:new Date().toISOString(),reportId:before.currentReportId});return c;
       });
       if(job)launchClassroom(job,input);json(res,{state:result,reply:decision.reply});return true;
+      } finally {classroomChats.delete(generation);}
     }
     if (p === '/api/classroom/analyze' && req.method === 'POST') {
       const b = await bodyJSON(req), jobId = id(), modelConfig = await modelSettings.read(); let input;
+      requireRevision(b);
       const mode=b.mode??'overview';
       if(!['overview','details'].includes(mode)||b.request!==undefined&&(typeof b.request!=='string'||b.request.length>1000))throw new AppError('分析模式或细分要求无效。',400);
       if(mode==='details'&&!['knowledge','emphasis','difficulties','observations'].includes(b.section))throw new AppError('请选择有效的细分分析内容。',400);
@@ -423,6 +484,7 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     const taskAction=p.match(/^\/api\/classroom\/jobs\/([a-f0-9-]+)\/(pause|resume|cancel)$/);
     if(taskAction && req.method==='POST'){
       const [,jobId,action]=taskAction,b=await bodyJSON(req);let resumeInput;
+      requireRevision(b);
       const result=await saveClass(b.revision,async c=>{
         const j=c.jobs.find(j=>j.id===jobId);if(!j)throw new AppError('任务不存在。',404);
         if(action==='resume'){
@@ -449,9 +511,9 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
       else classroomRuns.get(jobId)?.controller.abort(action);
       if(action==='cancel'){
         const running=classroomRuns.get(jobId);if(running)await running.task;
-        await rm(speechCheckpoint(jobId),{force:true});await rm(store.file(progressKey(jobId)),{force:true});await cleanupAudioFiles();
+        await rm(speechCheckpoint(jobId),{force:true});await store.remove(progressKey(jobId));await cleanupAudioFiles();
       }
-      json(res,result);return true;
+      json(res,action==='cancel'?await classroom():result);return true;
     }
     if (p === '/api/classroom/report' && req.method === 'GET') {
       const c=await classroom();
@@ -470,4 +532,59 @@ export function createApi(root, { dataDir = process.env.DATA_DIR || path.join(ro
     // Existing parsing / analysis routes are handled by the original server.
     return false;
   };
+  const handler=async(req,res,url)=>{
+    res.recoveryNotices=store.recoveries;
+    if(url.pathname.startsWith('/api/storage')){
+      const origin=req.headers.origin;if(origin&&origin!==`http://${req.headers.host}`)throw new AppError('拒绝外部来源请求。',403);
+      if(req.method==='GET'&&url.pathname==='/api/storage'){json(res,await storage.status());return true;}
+      if(req.method==='POST'&&url.pathname==='/api/storage/ack'){store.recoveries.clear();json(res,{acknowledged:true});return true;}
+      if(req.method!=='POST'||!['/api/storage/cleanup','/api/storage/archive','/api/storage/restore','/api/storage/delete-archive'].includes(url.pathname))throw new AppError('数据管理操作不存在。',404);
+      if(maintenanceBusy||inflightMutations||agentRuns.size||classroomRuns.size||pendingAudio.size||feedbackApi.isBusy())throw new AppError('还有操作正在保存或停止，请稍后再管理数据。',409);
+      maintenanceBusy=true;
+      try{await storage.assertIdle();const body=await bodyJSON(req);const result=url.pathname.endsWith('/cleanup')?await storage.cleanup():url.pathname.endsWith('/delete-archive')?await storage.deleteArchive(body.id):url.pathname.endsWith('/archive')?await storage.archive(body.keep??20):await storage.restore(body.id);if(url.pathname.endsWith('/restore')){ready=undefined;feedbackApi.resetRecovery();}json(res,{...result,status:await storage.status()});return true;}
+      finally{maintenanceBusy=false;}
+    }
+    const mutation=req.method==='POST'&&url.pathname.startsWith('/api/');
+    if(mutation&&maintenanceBusy)throw new AppError('正在整理历史数据，请稍后重试；输入保留。',409);
+    if(mutation)inflightMutations++;
+    try{return await route(req,res,url);}finally{if(mutation)inflightMutations--;}
+  };
+  handler.isBusy=()=>Boolean(maintenanceBusy||inflightMutations||agentRuns.size||classroomRuns.size||pendingAudio.size||feedbackApi.isBusy());
+  return handler;
+}
+
+// Scope belongs to the request URL, never to a process-wide "current class".
+// Two tabs can therefore work on different lessons without changing each other.
+export function createApi(root, options={}) {
+  const dataDir=options.dataDir||process.env.DATA_DIR||path.join(root,'data'),courses=new CourseService(dataDir);
+  let speechQueue=Promise.resolve();
+  const speechDelegate=options.speechCall||((...args)=>speechCommand(root,...args));
+  const speechCall=(mode,...args)=>{
+    if(mode!=='transcribe')return speechDelegate(mode,...args);
+    const task=speechQueue.catch(()=>{}).then(()=>{args[2]?.signal?.throwIfAborted();return speechDelegate(mode,...args);});speechQueue=task.catch(()=>{});return task;
+  };
+  const modelSettings=options.modelSettings||new ModelSettings(dataDir),shared={...options,speechCall,modelSettings,settingsStore:courses.store};
+  const legacy=createLessonApi(root,{...shared,dataDir}),scopes=new Map();
+  courses.beforeArchive=lessons=>{if(lessons.some(l=>(l.legacy?legacy:scopes.get(l.id))?.isBusy()))throw new AppError('本课程还有任务或保存正在进行，请先暂停或完成，再归档。',409);};
+  const handler=async(req,res,url)=>{
+    if(!url.pathname.startsWith('/api/'))return false;
+    if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`)throw new AppError('拒绝外部来源请求。',403);
+    res.recoveryNotices=courses.store.recoveries;
+    if(await courses.handle(req,res,url,{json,bodyJSON}))return true;
+    const lessonIds=url.searchParams.getAll('lesson'),lessonId=lessonIds[0];
+    const global=/^\/api\/(?:model-settings(?:\/|$)|status$|feedback\/settings(?:\/|$))/.test(url.pathname);
+    if(global||!lessonIds.length)return legacy(req,res,url);
+    if(lessonIds.length!==1||!lessonId)throw new AppError('课次标识无效，请从课程页重新进入。',404);
+    const context=await courses.initialize(lessonId);
+    if(req.method==='POST'&&(context.course.archived||context.lesson.archived))throw new AppError('该课次已归档，请先在课程中恢复。',409);
+    if(context.lesson.legacy)return legacy(req,res,url);
+    let scoped=scopes.get(lessonId);
+    if(!scoped){
+      if(scopes.size>=16){const idle=[...scopes].find(([,handler])=>!handler.isBusy());if(idle)scopes.delete(idle[0]);else throw new AppError('正在处理的课次较多，请等待部分任务完成。',429);}
+      scoped=createLessonApi(root,{...shared,dataDir:context.root,lessonContext:()=>courses.lessonContext(lessonId)});scopes.set(lessonId,scoped);
+    }
+    return scoped(req,res,url);
+  };
+  handler.isBusy=()=>Boolean(courses.pendingUploads.size||legacy.isBusy()||[...scopes.values()].some(scope=>scope.isBusy()));
+  return handler;
 }

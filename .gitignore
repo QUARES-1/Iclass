@@ -4,6 +4,7 @@
 
 # Local editor files
 .idea/
+.cph-ng/
 *.swp
 *.swo
 *~
@@ -12,6 +13,15 @@
 .env
 .env.*
 !.env.example
+
+# Local authentication files and private key material
+.aws/
+.ssh/
+.netrc
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Installed dependencies and Python caches
 node_modules/

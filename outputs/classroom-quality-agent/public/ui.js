@@ -1,9 +1,22 @@
+import {scopedURL} from './lesson-scope.js';
 export const $ = id => document.getElementById(id);
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export function notice(text, error = false) { $('notice').hidden = !text; $('notice').textContent = text; $('notice').className = error ? 'error' : ''; }
+export function announceConnectionSettings(kind, config) {
+  window.dispatchEvent(new CustomEvent(kind + '-settings-saved', {detail: config}));
+  try { localStorage.setItem('connection-settings-updated', Date.now() + ':' + crypto.randomUUID()); } catch {}
+}
+export function notice(text, error = false) {
+  let element = $('notice');
+  if (!element && text) {
+    element = document.createElement('div'); element.id = 'notice'; element.setAttribute('role', 'alert');
+    (document.querySelector('header') || document.body.firstElementChild).after(element);
+  }
+  if (element) { element.hidden = !text; element.textContent = text; element.className = error ? 'error' : ''; }
+}
 export async function api(url, data, options = {}) {
-  const response = await fetch(url, data === undefined ? options : { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data), ...options });
+  const response = await fetch(scopedURL(url), data === undefined ? options : { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data), ...options });
   const result = await response.json();
+  if(response.headers.get('X-Data-Recovery'))notice('检测到本地记录损坏，已恢复上一份有效保存。请核对内容，并在设置的“数据与恢复”查看记录。',true);
   if (!response.ok) { const error = new Error(result.error || '请求失败，请重试。'); error.state = result.state; error.status = response.status; throw error; }
   return result;
 }
@@ -15,6 +28,7 @@ export function saved(state) { $('save-status').textContent = state.savedAt ? '�
 export function time(seconds) { const t = Math.max(0, Math.floor(Number(seconds) || 0)); return (Math.floor(t / 3600) ? Math.floor(t / 3600) + ':' : '') + String(Math.floor(t / 60) % 60).padStart(2,'0') + ':' + String(t % 60).padStart(2,'0'); }
 export function originalTranscript(state, current) {
   const versions=new Map(state.transcriptVersions.map(t=>[t.id,t])), seen=new Set();
+  const pinned=versions.get(current?.originalTranscriptId);if(pinned?.source==='asr'&&pinned.audioId===current.audioId)return pinned;
   for(let t=current;t && t.audioId===current.audioId && !seen.has(t.id);t=versions.get(t.parentId)) {
     if(t.source==='asr')return t;
     seen.add(t.id);
@@ -47,7 +61,7 @@ export function uploadBlob(url,blob,{signal,onProgress=()=>{}}={}){
   return new Promise((resolve,reject)=>{
     const xhr=new XMLHttpRequest(),abort=()=>xhr.abort();
     const finish=(fn,value)=>{signal?.removeEventListener('abort',abort);fn(value);};
-    xhr.open('POST',url);xhr.responseType='json';
+    xhr.open('POST',scopedURL(url));xhr.responseType='json';
     xhr.upload.onprogress=event=>onProgress(event.loaded,event.lengthComputable?event.total:null);
     xhr.onload=()=>{const data=xhr.response;if(xhr.status>=200&&xhr.status<300 && data)finish(resolve,data);else{const error=new Error(data?.error||'上传失败，请重试。');error.status=xhr.status;finish(reject,error);}};
     xhr.onerror=()=>finish(reject,new Error('上传连接中断，原有数据保留，请检查服务后重试。'));

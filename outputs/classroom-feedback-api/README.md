@@ -1,6 +1,6 @@
 # 课堂反馈问卷（金数据）API 交付包
 
-「课堂质量改进智能体」Sprint 3 交付物：课后学生反馈问卷的设计、样例填写数据，以及金数据（Jinshuju）API v1 的 Node.js 接入封装，供下一轮同学继续完成问卷统计与课堂诊断联动。
+课后学生反馈问卷的前置设计、样例数据与金数据 API v1 客户端。相邻 [主应用](../classroom-quality-agent/README.md)已复用这里的定义、样例和客户端，提供动态模板、发布、同步、统计与课堂综合复盘，无需另启问卷服务。
 
 ## 交付内容
 
@@ -40,9 +40,10 @@ npm test
 
 测试使用注入的 mock fetch，不访问网络，也不依赖真实 Token。
 
-## 下一轮同学看这里
+## 与主应用的关系
 
 1. 阅读 `docs/questionnaire-design.md` 了解问卷口径与字段 `api_code`。
 2. 阅读 `docs/api-handoff.md` 了解接口封装与 Webhook。
-3. 用 `scripts/` 创建表单并导入样例数据。
-4. 在课堂质量智能体中新增问卷统计模块，复用 `src/jinshuju.js` 与 `src/survey.js`。
+3. 原始定义仍保留固定课程字段供独立脚本使用；主应用适配为9题默认模板并自动绑定课堂，不覆盖这些原始数据。
+4. `scripts/import-samples.mjs` 会写入远端，仅用于专用测试表单；主应用“载入问卷示例”只在本地建立隔离课堂。
+5. 已在专用测试问卷上验证真实创建、匿名填写、回流和截止关闭；实际响应适配与验收边界见主应用的[真实联调记录](../classroom-quality-agent/docs/sprint3-live-validation.md)。

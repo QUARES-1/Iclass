@@ -15,6 +15,11 @@ test('完整转写全文覆盖首尾所有片段，排除标记和小时级时�
 test('旧数据只迁移音频流程字段并保留合法转写',()=>{const s=migrateClassroom({meta:{course:'旧课程'},headUpRate:{average:0.8},tone:{mood:'calm'},segments});assert.equal(s.course.title,'旧课程');assert.equal(s.transcriptVersions[0].segments.length,2);assert.equal('headUpRate' in s,false);assert.equal('tone' in s,false);});
 test('真实时间检查拒绝越界、时间归零及重复ID',()=>{assert.equal(validateSegments(segments,16,'test').length,2);assert.throws(()=>validateSegments(segments,4,'test'));assert.throws(()=>validateSegments([...segments,{...segments[0],id:'c'}],16,'test'));assert.throws(()=>validateSegments([segments[0],{...segments[1],id:'a'}],16,'test'));});
 test('文字校正保留识别原稿与时间，旧报告待更新',()=>{const s=state();const next=applyClassroomCommand(s,{action:'correct',transcriptId:'t1',segments:[{id:'a',text:'人工校正术语'},{id:'b',text:segments[1].text}]});assert.equal(next.transcriptVersions[0].segments[0].text,segments[0].text);assert.equal(next.transcriptVersions[0].original,true);assert.equal(next.transcriptVersions[1].original,false);assert.equal(next.transcriptVersions[1].parentId,'t1');assert.equal(next.transcriptVersions[1].segments[0].start,1);assert.equal(next.reports[0].stale,true);assert.notEqual(next.currentTranscriptId,'t1');assert.equal(s.reports[0].stale,false);});
+test('反复保存相同转写或确认同一报告不追加音频历史',()=>{
+  let s=state();for(let i=0;i<100;i++)s=applyClassroomCommand(s,{action:'correct',transcriptId:s.currentTranscriptId,segments:s.transcriptVersions.at(-1).segments.map(({id,text,excluded})=>({id,text,excluded}))});
+  assert.equal(s.transcriptVersions.length,1);assert.equal(s.reports[0].stale,false);
+  for(let i=0;i<100;i++)s=applyClassroomCommand(s,{action:'confirmReport',reportId:'r1'});assert.equal(s.reports[0].history.length,1);
+});
 test('课程变更与原音频删除使分析失效，过期结论不能确认',()=>{const next=applyClassroomCommand(state(),{action:'course',course:{title:'新课程',description:'新说明'}});assert.equal(next.reports[0].stale,true);const item=next.reports[0].sections.summary[0];assert.throws(()=>applyClassroomCommand(next,{action:'reportItem',reportId:'r1',section:'summary',itemId:item.id,confirm:true}),/重新分析/);assert.equal(applyClassroomCommand(state(),{action:'deleteAudio'}).audio,null);});
 test('模型加载期间也不能删除正在识别的录音或清空课堂，结束后可删除',()=>{
   for(const stage of ['queued','processing','loading-model','transcribing']){

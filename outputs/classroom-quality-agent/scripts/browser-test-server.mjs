@@ -4,18 +4,49 @@ import {fileURLToPath} from 'node:url';
 import fs from 'node:fs/promises';
 import { sampleActivities } from '../src/samples.js';
 import { codeFixture } from '../test-support/codeFixture.js';
-process.env.PORT='3107';process.env.LLM_RATE_LIMIT='1000';process.env.LLM_BASE_URL='http://127.0.0.1:3108';process.env.LLM_API_KEY='browser-test-fixture';process.env.DATA_DIR=fileURLToPath(new URL('../artifacts/browser-data',import.meta.url));
+process.env.PORT='3107';process.env.LLM_RATE_LIMIT='1000';process.env.FEEDBACK_API_INTERVAL_MS='0';process.env.LLM_BASE_URL='http://127.0.0.1:3108';process.env.LLM_API_KEY='browser-test-fixture';process.env.DATA_DIR=fileURLToPath(new URL('../artifacts/browser-data',import.meta.url));
+// General browser cases start with both mock connections ready. Setup cases
+// override these reads to exercise missing fields without any real credentials.
+process.env.JINSHUJU_ACCESS_TOKEN='browser-provider-fixture';
+process.env.JINSHUJU_BASE_URL='http://127.0.0.1:3108/provider';
 await fs.rm(process.env.DATA_DIR,{recursive:true,force:true});
 await fs.mkdir(process.env.DATA_DIR,{recursive:true});
 const truncated=new Set(),reviewed=new Set();
+const providerForms=new Map();let providerCount=0;
+function providerReply(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data));}
 const mock=http.createServer(async(req,res)=>{
+  if(req.url.startsWith('/provider/')){
+    const url=new URL(req.url,'http://localhost');
+    if(url.pathname==='/provider/me'){providerReply(res,{id:'browser-provider',name:'问卷测试账户'});return;}
+    if(url.pathname==='/provider/forms'&&req.method==='POST'){
+      let raw='';for await(const c of req)raw+=c;const payload=JSON.parse(raw),token='browser-form-'+(++providerCount);
+      const fields=payload.fields.map((f,i)=>({['field_'+(i+1)]:{...f,type:({RadioButton:'single_choice',CheckBox:'multiple_choice',DropDown:'drop_down',RatingField:'rating',TextArea:'paragraph_text'})[f.type],...(f.choices?{choices:f.choices.map(o=>({name:o.value,value:o.api_code,hidden:false}))}:{})}}));
+      const form={token,url:'http://127.0.0.1:3108/provider/fill/'+token,name:payload.name,fields,setting:payload.setting||{}};
+      const records=[1,2].map(serial=>Object.assign({serial_number:serial,created_at:new Date(Date.now()-10000).toISOString()},...payload.fields.map((f,i)=>({['field_'+(i+1)]:f.choices?(f.type==='CheckBox'?[f.choices[0].value]:f.choices[0].value):f.type==='RatingField'?'4':'希望加强完整示例代码的调用与讲解。'}))));
+      providerForms.set(token,{form,records});providerReply(res,form,201);return;
+    }
+    const found=url.pathname.match(/^\/provider\/forms\/([^/]+)(?:\/(entries))?$/);
+    if(found){const entry=providerForms.get(found[1]);if(!entry){providerReply(res,{error:'不存在'},404);return;}providerReply(res,found[2]?{data:entry.records,next:null,total:entry.records.length}:entry.form);return;}
+    if(url.pathname.startsWith('/provider/fill/')){res.writeHead(200,{'Content-Type':'text/html;charset=utf-8'});res.end('<h1>测试问卷填写入口</h1>');return;}
+    providerReply(res,{error:'不存在'},404);return;
+  }
   let data='';for await(const c of req)data+=c;
   const body=JSON.parse(data);let input,out;
   // The retained material-understanding route sends a plain-text prompt.
   // Fail that fixture request explicitly so the app exercises its labelled
   // local-rule fallback; never crash the mock and the application process.
   try{input=JSON.parse(body.messages.at(-1).content);}catch{res.writeHead(503);res.end('{}');return;}
-  if(input.task==='connection-test'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{message:{content:'{"ok":true}'},finish_reason:'stop'}]}));return;}
+  if(input.phase==='feedback-decide'){
+    if(input.request==='你好')out={action:'reply',reply:'你好！可以一起讨论课堂反馈。'};
+    else if(input.toolResults.length)out={action:'reply',reply:'整体复盘与建议已保存，你可以继续修订。'};
+    else out={action:'plan',reply:'结合课堂资料形成整体复盘',steps:[{title:'汇总统计与原文并生成整体报告',tool:'analysis.generate',args:{}}]};
+  }
+  else if(input.phase==='feedback-analyze'){
+    const ref=input.items?.find(i=>i.evidenceId?.startsWith('feedback:'))?.evidenceId||'stat:q-difficulty';
+    out={summary:'整体总结：本节课内容形成了基本主线。学生反馈希望加强完整示例代码，下一课可以先复习关键概念，再演示完整函数及调用过程，留出提问时间。',findings:[{text:'反馈中出现加强示例代码的诉求。',kind:'observation',evidenceIds:[ref]}],suggestions:[{text:'下一课增加完整函数和调用示范，配合关键步骤讲解，避免只展示零散代码。',evidenceIds:[ref]},{text:'课前用简短回顾衔接已讲概念，再安排学生运行代码并提问。',evidenceIds:[ref]}]};
+  }
+  else if(input.task==='connection-test'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{message:{content:'{"ok":true}'},finish_reason:'stop'}]}));return;}
+  if(input.phase?.startsWith('feedback-')){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify(out)}}]}));return;}
   if(input.phase==='execute' && input.request?.includes('长课件慢速'))await new Promise(r=>setTimeout(r,input.request.includes('并行聊天验证')?2500:650));
   if(input.phase==='execute' && input.request?.includes('长课件自动') && !truncated.has(input.request)){truncated.add(input.request);res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{finish_reason:'length',message:{content:'{'}}]}));return;}
   if(input.request?.includes('服务失败')){res.writeHead(503);res.end('{}');return;}

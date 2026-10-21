@@ -62,7 +62,7 @@ export class ModelSettings {
   }
   public(config) {
     const { apiKey, ...visible } = config;
-    return { ...visible, apiKeyConfigured: Boolean(apiKey), defaults: { prompts: { ...DEFAULT_PROMPTS } }, contracts: { preparation: CHAT_CONTRACT, classroom: CLASSROOM_CONTRACT } };
+    return { ...visible, apiKeyConfigured: typeof apiKey === 'string' && Boolean(apiKey.trim()), defaults: { prompts: { ...DEFAULT_PROMPTS } }, contracts: { preparation: CHAT_CONTRACT, classroom: CLASSROOM_CONTRACT } };
   }
   async save(patch) {
     if (!Number.isSafeInteger(patch?.revision) || patch.revision < 0) throw new AppError('模型配置版本参数无效，请刷新设置。', 400);

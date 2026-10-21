@@ -18,7 +18,7 @@ export function migrateClassroom(raw = {}) {
   const audioFields = ['id','file','name','bytes','duration','codec','sampleRate','format','source','createdAt','playbackFile','deleted'];
   const cleanAudio = audio => audio ? Object.fromEntries(audioFields.filter(k => audio[k] !== undefined).map(k => [k,audio[k]])) : null;
   base.audio = cleanAudio(base.audio);
-  base.transcriptVersions = base.transcriptVersions.map(t => ({ ...Object.fromEntries(['id','audioId','source','original','createdAt','parentId','processing'].filter(k => t[k] !== undefined).map(k => [k,t[k]])), audio: cleanAudio(t.audio), segments: (t.segments || []).map(s => Object.fromEntries(['id','start','end','text','timestampSource','excluded'].filter(k => s[k] !== undefined).map(k => [k,s[k]]))) }));
+  base.transcriptVersions = base.transcriptVersions.map(t => ({ ...Object.fromEntries(['id','audioId','source','original','createdAt','parentId','originalTranscriptId','processing'].filter(k => t[k] !== undefined).map(k => [k,t[k]])), audio: cleanAudio(t.audio), segments: (t.segments || []).map(s => Object.fromEntries(['id','start','end','text','timestampSource','excluded'].filter(k => s[k] !== undefined).map(k => [k,s[k]]))) }));
   const cleanSections = sections => Object.fromEntries(Object.keys(REPORT_SECTIONS).map(k => [k,(sections?.[k] || []).filter(item => typeof item.text === 'string' && !/抬头率|注意力回落|投入回升|attention-low|headUpRate/.test(item.text)).map(item => Object.fromEntries(['id','text','kind','evidenceIds','confirmed','edited','timeEvidence'].filter(f => item[f] !== undefined).map(f => [f,item[f]])))]));
   base.reports = base.reports.map(r => ({ ...Object.fromEntries(['id','transcriptId','courseVersion','course','stale','createdAt','source','coverage','mode','detailSections','parentReportId','detailRequest','textNormalization'].filter(k => r[k] !== undefined).map(k => [k,r[k]])), sections: cleanSections(r.sections), history:(r.history||[]).map(h=>({id:h.id,createdAt:h.createdAt,sections:cleanSections(h.sections)})) }));
   if (!base.course.title && typeof raw.meta?.course === 'string') base.course.title = raw.meta.course;
@@ -54,6 +54,7 @@ export function applyClassroomCommand(raw, cmd) {
     const current = transcriptOf(state);
     if (!current || current.id !== cmd.transcriptId) throw new AppError('转写版本已改变，请刷新后重试。', 409);
     if (!Array.isArray(cmd.segments) || cmd.segments.length !== current.segments.length || !cmd.segments.every((s, i) => s.id === current.segments[i].id && typeof s.text === 'string' && s.text.length <= 16000 && (s.excluded===undefined || typeof s.excluded==='boolean'))) throw new AppError('校正必须保留原片段与时间；可修改文字或排除误识别片段。');
+    if(cmd.segments.every((s,i)=>s.text===current.segments[i].text&&(s.excluded===true||!s.text.trim())===Boolean(current.segments[i].excluded)))return state;
     const v = { ...current, id: id(), parentId: current.id, source: 'teacher', original: false, segments: current.segments.map((s, i) => ({ ...s, text: cmd.segments[i].text, excluded:cmd.segments[i].excluded===true || !cmd.segments[i].text.trim() })), createdAt: new Date().toISOString() };
     state.transcriptVersions.push(v); state.currentTranscriptId = v.id; invalidateReports(state);
   } else if(cmd.action==='simplifyTranscript'){
@@ -72,12 +73,14 @@ export function applyClassroomCommand(raw, cmd) {
     if(hasClassroomTask(state))throw new AppError('请先暂停当前任务再切换录音。',409);
     const audio=[state.audio,...state.transcriptVersions.map(t=>t.audio),...state.jobs.map(j=>j.audio)].find(a=>a?.id===cmd.audioId&&!a.deleted);
     if(!audio)throw new AppError('录音不存在或已删除。',404);
+    if(state.audio?.id===audio.id)return state;
     state.audio=clone(audio);state.audioGeneration++;
     state.currentTranscriptId=state.transcriptVersions.filter(t=>t.audioId===audio.id).at(-1)?.id||null;invalidateReports(state);
   } else if (cmd.action === 'selectTranscript') {
     if(hasClassroomTask(state))throw new AppError('请先暂停当前任务再切换转写。',409);
     const t=state.transcriptVersions.find(t=>t.id===cmd.transcriptId);
     if(!t)throw new AppError('转写版本不存在。',404);
+    if(state.currentTranscriptId===t.id)return state;
     state.currentTranscriptId=t.id;state.audio=t.audio&&!t.audio.deleted?clone(t.audio):null;state.audioGeneration++;invalidateReports(state);
   } else if (['selectReport','restoreReportRevision','confirmReport'].includes(cmd.action)) {
     if(hasClassroomTask(state))throw new AppError('请先暂停当前任务再切换或确认报告。',409);
@@ -88,11 +91,11 @@ export function applyClassroomCommand(raw, cmd) {
       r.stale=r.transcriptId!==state.currentTranscriptId||r.courseVersion!==state.courseVersion||Boolean(state.transcriptVersions.find(t=>t.id===r.transcriptId)?.audio?.deleted);
     } else if(cmd.action==='confirmReport') {
       if(r.stale)throw new AppError('输入已更新，请重新分析后确认。');
-      rememberReport(r);Object.values(r.sections).flat().forEach(item=>item.confirmed=true);
+      if(Object.values(r.sections).flat().some(item=>!item.confirmed)){rememberReport(r);Object.values(r.sections).flat().forEach(item=>item.confirmed=true);}
     } else {
       const h=r.history.find(h=>h.id===cmd.historyId);
       if(!h)throw new AppError('修订版本不存在。',404);
-      const sections=clone(h.sections);rememberReport(r);r.sections=sections;
+      const sections=clone(h.sections);if(JSON.stringify(sections)!==JSON.stringify(r.sections)){rememberReport(r);r.sections=sections;}
     }
   } else if (cmd.action === 'reportItem') {
     const report = reportOf(state);
@@ -106,7 +109,7 @@ export function applyClassroomCommand(raw, cmd) {
       if (item.text !== cmd.text) { rememberReport(report);item.text = cmd.text; item.confirmed = false; item.edited = true; }
     }
   } else if (cmd.action === 'deleteAudio') {
-    if (state.jobs.some(j => ['queued','processing','loading-model','transcribing'].includes(j.stage))) throw new AppError('正在转写，完成后可删除。', 409);
+    if (hasClassroomTask(state)) throw new AppError('任务进行中，请先暂停或取消再删除录音。', 409);
     const audioId=state.audio?.id;
     state.transcriptVersions.forEach(t=>{if(t.audio?.id===audioId)t.audio.deleted=true;});
     state.jobs.forEach(j=>{if(j.audio?.id===audioId)j.audio.deleted=true;});

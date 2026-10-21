@@ -1,3 +1,5 @@
+import {scopedURL, scopeKey} from './lesson-scope.js';
+import {receiveFeedbackHandoff} from './feedback-handoff.js';
 import { $, esc, api, notice, download, saved, captureView } from './ui.js';
 import { validateUpload,MAX_MATERIALS,MAX_EXTRACTED_CHARACTERS } from '../src/uploadPolicy.js';
 import { renderActivity } from '../src/interactive.js';
@@ -6,8 +8,20 @@ import { toMarkdown } from '../src/pptGenerator.js';
 import { matchSupplements } from '../src/frontier.js';
 import { watchAgent, renderAgent, resetAgent, agentCallbacks, conversationPending } from './agent-ui.js';
 import { renderCode, bindCodeCopy } from './code-ui.js';
+import {createDraftCache} from './draft-cache.js';
 
 const drafts = new Map();
+const preparationFingerprint=()=>JSON.stringify([state?.resources.map(r=>[r.id,r.currentVersionId]),state?.materials.map(m=>m.id),state?.requirements,state?.analysis,state?.supplements]);
+const draftCache=createDraftCache('preparation',{capture:()=>({entries:[...drafts],fields:Object.fromEntries(['request','material-title','material-text'].map(key=>[key,$(key)?.value||'']))}),fingerprint:preparationFingerprint,apply:record=>{
+  let skipped=0;
+  for(const [key,value]of record.entries){
+    const [resourceId,target,field]=key.split(':'),r=state.resources.find(r=>r.id===resourceId);
+    const valid=resourceId==='setting'&&Object.hasOwn(state.requirements,target)||resourceId==='analysis'&&Array.isArray(state.analysis?.[target])||resourceId==='supplement'&&state.analysis&&record.base===preparationFingerprint()||r&&(target==='activity'?r.type!=='ppt':version(r).content.slides?.some(s=>s.id===target)&&['title','bullets','notes','example','counterExample','codeSource','codeLanguage'].includes(field));
+    if(!valid){skipped++;continue;}if(!drafts.has(key))drafts.set(key,value);
+  }
+  for(const [key,value]of Object.entries(record.fields))if(['request','material-title','material-text'].includes(key)&&$(key)&&!$(key).value)$(key).value=value;
+  render();return {skipped};
+},onError:message=>notice(message,true)});
 let mutationQueue = Promise.resolve();
 function serial(fn) { const task = mutationQueue.catch(() => {}).then(fn); mutationQueue = task.catch(() => {}); return task; }
 let state, busy = false, submitting = false, previewReady = false, previewToken = '', previewIdentity='', previewTimer, contextSuggestions = [], materialUpload=null, understanding=false, sampleLoading=false;
@@ -76,7 +90,7 @@ function render() {
   $('messages').innerHTML = state.messages.map(m => `<div class="message ${m.role} ${m.status === 'failed' ? 'failed' : ''}"><strong>${m.role === 'user' ? '教师' : '备课智能体'}</strong>${m.text.length>600?`<p>${esc(m.text.slice(0,180))}…</p><details><summary>完整内容</summary><p>${esc(m.text)}</p></details>`:`<p>${esc(m.text)}</p>`}${m.status === 'processing' ? `<small>${m.mode==='task'?'正在处理，进度见上方。':'正在回应…'}</small>` : ''}${m.error ? `<small>这条要求尚未完成。</small><details><summary>查看原因</summary><p>${esc(m.error)}</p></details><button data-retry="${m.id}">重新规划这条要求</button>` : ''}${m.summary ? `<details><summary>修改记录</summary><small>${esc(m.summary)}</small></details>` : ''}</div>`).join('');
   if(!state.messages.some(m=>m.jobId))resetAgent();
   restoreDrafts();
-  restoreView();if(followMessages)messages.scrollTop=messages.scrollHeight;
+  restoreView();if(followMessages)messages.scrollTop=messages.scrollHeight;draftCache.save();
   document.querySelectorAll('[data-retry]').forEach(b => b.onclick = handle(async () => { if(busy)return;const m = state.messages.find(m => m.id === b.dataset.retry); if(m.resourceId && state.resources.some(r=>r.id===m.resourceId) && state.selectedId!==m.resourceId)await command('select',{resourceId:m.resourceId});$('scope').value='';$('request').value=m.text;await sendRequest(); }));
 }
 function draftMatchesSaved(key,value){
@@ -206,7 +220,7 @@ async function sendRequest() {
     const r = resource(); notice('');
     const result = await api('/api/workspace/agent', {revision:state.revision,request,resourceId:r?.id || null,baseVersionId:version(r)?.id || null,pageId:scope || null});
     state=result.workspace;
-    if($('request').value.trim()===request)$('request').value = ''; render(); followAgent(result.job);
+    if($('request').value.trim()===request){$('request').value = '';$('request').dispatchEvent(new Event('input',{bubbles:true}));} render(); followAgent(result.job);
   } catch (error) {
     if (error.state) { state = error.state; render(); }
     if(!$('request').value.trim())$('request').value = request; throw error;
@@ -261,7 +275,7 @@ $('files').onchange = handle(async () => {
     $('parse-status').textContent = file.name + ' · 解析中…';
     try {
       validateUpload(file,'material');
-      const response = await fetch('/api/extract-file?name='+encodeURIComponent(file.name),{method:'POST',body:file,signal:materialUpload.signal}), result = await response.json();
+      const response = await fetch(scopedURL('/api/extract-file?name='+encodeURIComponent(file.name)),{method:'POST',body:file,signal:materialUpload.signal}), result = await response.json();
       if (!response.ok) throw new Error(result.error);
       if(materialUpload.signal.aborted){cancelled=true;break;}
       await command('material',{material:{title:file.name,type:result.type,content:result.content,truncated:result.truncated,originalCharacters:result.originalCharacters}});completed++;
@@ -303,7 +317,7 @@ $('clear-context').onclick = handle(async () => {
   if(!state)throw new Error('正在恢复工作空间，请稍候。');
   if(busy||state.messages.some(m=>m.status==='processing'))throw new Error('请先暂停正在执行的任务，再清空上下文。');
   if(!state.messages.length){notice('当前没有历史对话。');return;}
-  if(!confirm('清空全部历史对话和对话上下文？课件、资料、教师设置和输入中的新要求会保留。已暂停任务将无法继续，旧对话无法恢复。'))return;
+  if(!confirm('清空全部历史对话和对话上下文？课件、资料、教师设置和输入中的新要求会保留。清空后当前页面无法继续这些任务；已保留的归档和恢复副本不受影响。'))return;
   const button=$('clear-context');button.disabled=true;
   try{await command('clearConversation');resetAgent();notice('已清空历史对话和对话上下文；课件、资料与教师设置保留。');$('request').focus();}
   finally{button.disabled=false;}
@@ -334,7 +348,17 @@ $('btn-generate-ppt').onclick = () => { $('request').value = '根据当前课程
 document.querySelectorAll('[data-new]').forEach(b => b.onclick = () => { const type={ppt:'PPT',game:'小游戏',web:'教学网页'}[b.dataset.new]; $('request').value='新建一个关于'+($('topic').value||'请填写课程主题')+'的'+type+'。'; document.querySelector('.workbench').dataset.tab='chat'; $('request').focus(); });
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => document.querySelector('.workbench').dataset.tab=b.dataset.tab);
 window.addEventListener('beforeunload',event=>{if(drafts.size||busy||materialUpload||$('request').value.trim()||$('material-text').value.trim()){event.preventDefault();event.returnValue='';}});
-try { state = await api('/api/workspace'); render(); const users=state.messages.filter(m=>m.role==='user'&&m.jobId), latestTask=[...users].reverse().find(m=>m.mode==='task'||!m.mode), pending=users.filter(m=>m.status==='processing');for(const id of new Set([latestTask?.jobId,users.at(-1)?.jobId,...pending.map(m=>m.jobId)].filter(Boolean))){const job=await api('/api/workspace/agent/'+id);if(state.messages.some(m=>m.jobId===job.id)){if(['completed','paused','failed'].includes(job.stage))renderAgent(job);else followAgent(job);}}const status = await api('/api/status'); $('model-status').textContent = status.textModelConfigured ? '当前模型：' + status.model : '请先配置文本模型，或载入本地示例。'; }
+async function openRequestedResource(){
+  const url=new URL(location.href),target=url.searchParams.get('resource');if(!target)return;
+  if(!state.resources.some(r=>r.id===target)){notice('这份资源已不存在，请在左侧选择现有资源。',true);return;}
+  if(state.selectedId!==target){try{state=await api('/api/workspace',{revision:state.revision,action:'select',resourceId:target});}
+    catch(error){if(error.status===409&&error.message.includes('归档'))state.selectedId=target;else{notice('未能定位这份资源：'+error.message,true);return;}}}
+  url.searchParams.delete('resource');history.replaceState(null,'',url.pathname+url.search+url.hash);
+}
+try { state = await api('/api/workspace'); await openRequestedResource(); await draftCache.restore(); render(); const users=state.messages.filter(m=>m.role==='user'&&m.jobId), latestTask=[...users].reverse().find(m=>m.mode==='task'||!m.mode), pending=users.filter(m=>m.status==='processing');for(const id of new Set([latestTask?.jobId,users.at(-1)?.jobId,...pending.map(m=>m.jobId)].filter(Boolean))){const job=await api('/api/workspace/agent/'+id);if(state.messages.some(m=>m.jobId===job.id)){if(['completed','paused','failed'].includes(job.stage))renderAgent(job);else followAgent(job);}}const status = await api('/api/status'); $('model-status').textContent = status.textModelConfigured ? '当前模型：' + status.model : '请先配置文本模型，或载入本地示例。'; }
 catch (error) { $('save-status').textContent='恢复失败'; notice(error.message,true); }
 
 window.addEventListener('focus', async () => { try { const status = await api('/api/status'); $('model-status').textContent = status.textModelConfigured ? '当前文本模型：' + status.model + '。' : '文本模型尚未配置，请打开“模型与提示词设置”。'; } catch {} });
+
+void receiveFeedbackHandoff();
+window.addEventListener('model-settings-saved',e=>{$('model-status').textContent='当前模型：'+e.detail.model;});

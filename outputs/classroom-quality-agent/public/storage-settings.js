@@ -1,0 +1,19 @@
+import {$,api,notice,esc} from './ui.js';
+import {clearBrowserDrafts} from './draft-cache.js';
+const panel=document.createElement('section');panel.className='panel';panel.innerHTML=`<details id="storage-panel"><summary>数据与恢复</summary><p>查看本机数据占用、归档历史或回收无引用文件。每次保存保留上一份有效副本；模型权重不计入数据额度。</p><p id="storage-usage" role="status">展开后读取。</p><fieldset id="storage-actions"><div class="actions"><button type="button" id="storage-refresh">刷新空间统计</button><button type="button" id="storage-cleanup">清理无引用数据</button></div><label>归档后每项保留的近期历史数<input type="number" id="storage-keep" min="2" max="200" value="20"></label><button type="button" id="storage-archive">归档较早历史</button><p class="muted">保留当前版本、直接撤销目标、暂停任务及课堂关联所需版本。归档可补回历史；录音文件仍在数据目录，迁移时请备份整个 data 目录。数据额度默认5 GiB，可通过 DATA_MAX_BYTES 配置。</p><div id="storage-recoveries"></div><div id="storage-archives"></div></fieldset></details>`;document.querySelector('main').append(panel);
+let busy=false,loaded=false;
+const clearDrafts=document.createElement('button');clearDrafts.type='button';clearDrafts.textContent='清除本浏览器的草稿缓存';clearDrafts.onclick=()=>run(async()=>{if(!confirm('清除本浏览器各标签页尚未保存的草稿缓存？已保存课件和报告保留。'))return;await clearBrowserDrafts();notice('本浏览器草稿缓存已清除。');});$('storage-actions').append(clearDrafts);
+const size=n=>(n/1024**2).toFixed(1)+' MiB';
+function render(state){
+  $('storage-usage').textContent=state.scoped?`本课次数据 ${size(state.bytes)}，共 ${state.files} 个文件；项目总数据 ${size(state.globalBytes)} / ${size(state.maxBytes)}。归档与清理只处理本课次，课程资料库保留。`:`本地数据 ${size(state.bytes)} / ${size(state.maxBytes)}，共 ${state.files} 个文件。归档与清理处理原有工作区，课程资料库及其他课次保留。`;
+  $('storage-recoveries').textContent=state.recoveries.map(r=>`${r.time}：${r.key}，${r.message}`).join('\n');
+  if(state.recoveries.length){const acknowledge=document.createElement('button');acknowledge.type='button';acknowledge.textContent='已核对恢复内容';acknowledge.onclick=()=>run(async()=>{await api('/api/storage/ack',{});render(await api('/api/storage'));notice('已确认恢复记录。');});$('storage-recoveries').append(acknowledge);}
+  $('storage-archives').innerHTML=state.archives.length?'<h3>历史归档</h3>'+state.archives.map(a=>`<p>${esc(new Date(a.createdAt).toLocaleString())} · ${size(a.bytes)} <button type="button" data-restore-archive="${a.id}">补回历史</button> <button type="button" data-delete-archive="${a.id}">删除归档</button></p>`).join(''):'<p>尚无历史归档。</p>';
+  document.querySelectorAll('[data-restore-archive]').forEach(button=>button.onclick=()=>run(async()=>{if(!confirm('补回归档中的历史、缺失资源和资料？当前版本和已有修改保留。'))return;const result=await api('/api/storage/restore',{id:button.dataset.restoreArchive});render(result.status);notice('历史已补回，可回工作台或课堂复盘选择历史版本。');}));
+  document.querySelectorAll('[data-delete-archive]').forEach(button=>button.onclick=()=>run(async()=>{if(!confirm('永久删除此历史归档？已经补回的内容保留，尚未补回的归档历史将无法恢复。'))return;const result=await api('/api/storage/delete-archive',{id:button.dataset.deleteArchive});render(result.status);notice('归档已删除。');}));
+}
+async function run(task){if(busy)return;busy=true;$('storage-actions').disabled=true;try{await task();}catch(error){notice(error.message,true);}finally{busy=false;$('storage-actions').disabled=false;}}
+const refresh=()=>run(async()=>{render(await api('/api/storage'));loaded=true;});
+$('storage-panel').ontoggle=()=>{if($('storage-panel').open&&!loaded)void refresh();};$('storage-refresh').onclick=refresh;
+$('storage-cleanup').onclick=()=>run(async()=>{const result=await api('/api/storage/cleanup',{});render(result.status);notice(`已回收 ${result.removed} 项无引用或过期数据。`);});
+$('storage-archive').onclick=()=>run(async()=>{const keep=Number($('storage-keep').value);if(!Number.isInteger(keep)||keep<2||keep>200)throw new Error('保留数量须为2～200。');if(!confirm('将较早历史保存为本地归档，并从当前工作记录中移出？可在此补回历史。'))return;const result=await api('/api/storage/archive',{keep});render(result.status);notice(result.skipped?'没有需要归档的较早历史。':'历史已归档，当前内容和必要引用保留。');});
