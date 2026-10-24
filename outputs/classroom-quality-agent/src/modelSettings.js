@@ -4,7 +4,7 @@ import { DEFAULT_PROMPTS, CHAT_CONTRACT, CLASSROOM_CONTRACT } from './prompts.js
 const numericRules = {
   maxTokens: [1, 1000000, true], temperature: [0, 2, false],
   timeoutMs: [5000, 600000, true], maxInputChars: [1000, 2000000, true],
-  batchPages: [1, 6, true], maxAgentCalls: [1, 500, true], maxPlanSteps: [1, 300, true], maxRepairs: [0, 5, true],
+  batchPages: [1, 6, true], maxAgentCalls: [1, 500, true], maxPlanSteps: [1, 300, true], maxRepairs: [0, 99, true],
 };
 function numberDefault(value, fallback, key) {
   const n = Number(value), [min, max, integer] = numericRules[key];
