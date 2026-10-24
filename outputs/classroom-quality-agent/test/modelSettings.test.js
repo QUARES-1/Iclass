@@ -55,6 +55,23 @@ test('配置校验拒绝非法地址、空模型、越界数字、异常密钥�
   assert.equal(saved.temperature, 0); assert.equal(saved.maxTokens, 32000);
 });
 
+test('修正额度支持0至99且保存后可恢复，总调用次数与修正轮次独立', async () => {
+  const current = environmentSettings({});
+  assert.equal(current.maxRepairs, 3);
+  for (const maxRepairs of [0, 5, 6, 99]) assert.equal(validateModelSettings(current, {maxRepairs}).maxRepairs, maxRepairs);
+  for (const maxRepairs of [-1, 100, 1.5, Infinity]) assert.throws(() => validateModelSettings(current, {maxRepairs}));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'repair-settings-'));
+  try {
+    const settings = new ModelSettings(dir, {});
+    await settings.save({revision: 0, maxRepairs: 99, maxAgentCalls: 300});
+    const restored = await new ModelSettings(dir, {}).read();
+    assert.equal(restored.maxRepairs, 99);
+    assert.equal(restored.maxAgentCalls, 300);
+    const html = await readFile(new URL('../public/settings.html', import.meta.url), 'utf8');
+    assert.match(html, /id="max-repairs"[^>]*max="99"/);
+  } finally { await rm(dir, {recursive: true, force: true, maxRetries: 3, retryDelay: 100}); }
+});
+
 test('真实模型请求使用全部配置参数，超出额度时明确提示且不发送截断资料', async () => {
   let body, endpoint, authorization, calls = 0;
   const config = { apiKey: 'test-secret', baseUrl: 'https://compatible.example/v1/', model: 'custom-model', temperature: 0, maxTokens: 24000, timeoutMs: 60000, maxInputChars: 3000,

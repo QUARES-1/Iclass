@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -312,6 +312,159 @@ for (const failure of ['无语音', '模型不可用', 'AI 服务失败', '无�
       assert.equal(retried.jobs.at(-1).stage, 'completed');
       assert.deepEqual(retried.transcriptVersions[0], before.transcriptVersions[0]);
       assert.deepEqual(retried.reports[0], { ...before.reports[0], stale: endpoint === 'transcribe' });
+    });
+  });
+}
+
+test('Sprint 2 转写续跑：暂停保留检查点，重启后继续同一任务且只提交一个版本', {timeout: 15000}, async () => {
+  let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  let calls = 0, checkpointPath;
+  await withClassroom({speechCall: async (mode, audioPath, onEvent, config) => {
+    if (mode === 'probe') return speechCall(mode);
+    calls++;
+    if (calls === 1) {
+      checkpointPath = config.checkpointPath;
+      await writeFile(checkpointPath, JSON.stringify({completedParts: 1, segments: [segments[0]]}));
+      await onEvent({stage: 'chunk-complete', completedParts: 1, totalParts: 2});
+      return new Promise((_resolve, reject) => {
+        config.signal.addEventListener('abort', () => reject(new Error('模拟语音进程收到暂停')), {once: true});
+        entered();
+      });
+    }
+    assert.equal(config.checkpointPath, checkpointPath);
+    assert.deepEqual(JSON.parse(await readFile(checkpointPath, 'utf8')).segments, [segments[0]]);
+    return {segments: structuredClone(segments), chunks: [{start: 0, end: 30}]};
+  }}, async api => {
+    await api.upload();
+    const started = await api.post('/api/classroom/transcribe', {revision: (await api.getState()).revision}, 202);
+    const jobId = started.jobs.at(-1).id;
+    await ready;
+    const paused = await api.post('/api/classroom/jobs/' + jobId + '/pause', {revision: (await api.getState()).revision});
+    assert.equal(paused.jobs.at(-1).stage, 'paused');
+    assert.equal(paused.jobs.at(-1).completedParts, 1);
+    assert.equal(paused.transcriptVersions.length, 0);
+    await api.restart();
+    const restored = await api.getState();
+    assert.equal(restored.jobs.at(-1).stage, 'paused');
+    assert.equal(calls, 1, '重启不能自动触发语音调用');
+    await api.post('/api/classroom/jobs/' + jobId + '/resume', {revision: restored.revision});
+    for (let i = 0; i < 200; i++) {
+      const current = await api.getState();
+      if (current.jobs.at(-1).stage === 'completed') break;
+      await delay(10);
+    }
+    const completed = await api.getState();
+    assert.equal(completed.jobs.at(-1).stage, 'completed');
+    assert.equal(completed.jobs.length, 1);
+    assert.equal(completed.transcriptVersions.length, 1);
+    assert.deepEqual(transcriptOf(completed).segments, segments);
+    assert.equal(calls, 2);
+    // Completion is saved before asynchronous checkpoint removal.
+    for (let i = 0; i < 200 && (await readdir(api.dataDir)).includes(path.basename(checkpointPath)); i++) await delay(10);
+    await assert.rejects(readFile(checkpointPath), {code: 'ENOENT'});
+  });
+});
+
+test('Sprint 2 取消转写：迟到结果不能覆盖旧转写或报告，取消后不可续跑', {timeout: 15000}, async () => {
+  let entered, release, calls = 0, checkpointPath;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  await withClassroom({speechCall: async (mode, audioPath, onEvent, config) => {
+    if (mode === 'probe') return speechCall(mode);
+    if (++calls === 2) {
+      checkpointPath = config.checkpointPath;
+      await writeFile(checkpointPath, JSON.stringify({completedParts: 1}));
+      config.signal.addEventListener('abort', release, {once: true});
+      entered();
+      await gate;
+      // Deliberately emulate a worker returning a valid result after cancellation.
+      return {segments: segments.map(s => ({...s, text: '不应写入的迟到结果'}))};
+    }
+    return speechCall(mode);
+  }}, async api => {
+    try {
+      await api.upload();
+      await api.job('transcribe');
+      const before = await api.job('analyze');
+      const started = await api.post('/api/classroom/transcribe', {revision: before.revision}, 202);
+      const jobId = started.jobs.at(-1).id;
+      await ready;
+      const cancelled = await api.post('/api/classroom/jobs/' + jobId + '/cancel', {revision: (await api.getState()).revision});
+      assert.equal(cancelled.jobs.at(-1).stage, 'cancelled');
+      assert.deepEqual(cancelled.transcriptVersions, before.transcriptVersions);
+      assert.deepEqual(cancelled.reports, before.reports);
+      await assert.rejects(readFile(checkpointPath), {code: 'ENOENT'});
+      await api.post('/api/classroom/jobs/' + jobId + '/resume', {revision: cancelled.revision}, 409);
+      await api.upload('after-cancel.wav');
+      assert.equal((await api.job('transcribe')).jobs.at(-1).stage, 'completed');
+    } finally { release(); }
+  });
+});
+
+for (const change of ['录音', '课程', '转写']) {
+  test(`Sprint 2 失败分析续跑：${change}变化后拒绝使用旧输入，历史报告保留`, async () => {
+    let unavailable = false;
+    await withClassroom({modelCall: (system, input) => {
+      if (unavailable) throw new Error('模拟模型离线');
+      return modelCall(system, input);
+    }}, async api => {
+      await api.upload();
+      await api.job('transcribe');
+      const before = await api.job('analyze');
+      unavailable = true;
+      const failed = await api.job('analyze', {}, 'failed');
+      const jobId = failed.jobs.at(-1).id;
+      if (change === '录音') await api.upload('new-input.wav');
+      if (change === '课程') await api.command({action: 'course', course: {title: '变化后的课程', description: ''}});
+      if (change === '转写') await api.command({action: 'correct', transcriptId: failed.currentTranscriptId,
+        segments: transcriptOf(failed).segments.map(s => ({id: s.id, text: s.text + '教师校正'}))});
+      const changed = await api.getState();
+      const response = await api.post('/api/classroom/jobs/' + jobId + '/resume', {revision: changed.revision}, 409);
+      assert.match(response.error, /已变化/);
+      assert.deepEqual(await api.getState(), changed);
+      assert.deepEqual(reportOf(changed).sections, reportOf(before).sections);
+      assert.equal(reportOf(changed).stale, true);
+    });
+  });
+}
+
+test('Sprint 2 排除全部片段：拒绝分析且不调用模型，恢复原稿后可重新分析', async () => {
+  let calls = 0;
+  await withClassroom({modelCall: (system, input) => { calls++; return modelCall(system, input); }}, async api => {
+    await api.upload();
+    const transcribed = await api.job('transcribe');
+    const original = transcriptOf(transcribed);
+    const excluded = await api.command({action: 'correct', transcriptId: original.id,
+      segments: original.segments.map(s => ({id: s.id, text: s.text, excluded: true}))});
+    await api.post('/api/classroom/analyze', {revision: excluded.revision}, 422);
+    assert.equal(calls, 0);
+    assert.equal((await api.getState()).jobs.length, 1, '被拒绝的分析不应创建半个任务');
+    assert.deepEqual((await api.getState()).transcriptVersions[0], original);
+    await api.command({action: 'selectTranscript', transcriptId: original.id});
+    assert.equal((await api.job('analyze')).reports.length, 1);
+    assert.ok(calls > 0);
+  });
+});
+
+for (const [label, invalidSegments] of [
+  ['重复片段ID', [segments[0], {...segments[1], id: segments[0].id}]],
+  ['超过录音时长', [{...segments[0], end: 100}]],
+  ['时间倒序', [segments[1], segments[0]]],
+]) {
+  test(`Sprint 2 转写结果校验：${label}不写入，旧报告与原稿保持有效`, async () => {
+    let malformed = false;
+    await withClassroom({speechCall: async mode => mode === 'transcribe' && malformed
+      ? {segments: invalidSegments} : speechCall(mode)}, async api => {
+      await api.upload();
+      await api.job('transcribe');
+      const before = await api.job('analyze');
+      malformed = true;
+      const failed = await api.job('transcribe', {}, 'failed');
+      assert.deepEqual(failed.transcriptVersions, before.transcriptVersions);
+      assert.deepEqual(failed.reports, before.reports);
+      assert.equal(failed.currentTranscriptId, before.currentTranscriptId);
+      assert.equal(failed.currentReportId, before.currentReportId);
     });
   });
 }

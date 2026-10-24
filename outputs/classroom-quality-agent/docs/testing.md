@@ -29,6 +29,24 @@ npm run test:browser
 
 浏览器测试的报告位于`playwright-report/`，失败截图和轨迹位于`test-results/`。运行期间不要同时启动另一套使用相同测试端口的测试服务。
 
+## Sprint 1 专项回归
+
+```sh
+npm run test:sprint1
+```
+
+Windows PowerShell 可使用 `npm.cmd run test:sprint1`。专项统一覆盖资料解析、知识点及补充、
+大纲、智能体计划/执行/检查、资源及版本、人工确认、导出模型与版式、模型设置。
+2026-10-24 新增5项智能体连续流程测试和1项配置边界/持久化测试：分批生成到人工修订后重新确认导出、
+超过5轮修正、修正额度耗尽后续跑、修正计划预算不足后续跑、实际调用次数耗尽后只补最终检查，
+以及0～99轮设置前后端一致、100轮拒绝和额度独立保存。Windows Node.js 24 共125项通过。
+模型使用模拟输出；导出验证覆盖模型和版式构建，不代表实际 PPTX 在 Office 中的打开效果。
+本轮未运行浏览器操作、真实在线模型或 Office 人工验收。受限环境可使用：
+
+```sh
+node --test --test-isolation=none test/sprint1-flow.test.js test/agent.test.js test/workspace.test.js test/pptExport.test.js test/review.test.js test/modelSettings.test.js test/pptGenerator.test.js test/fileParser.test.js test/analyzer.test.js test/frontier.test.js
+```
+
 ## Sprint 2 专项回归
 
 ```sh
@@ -36,6 +54,16 @@ npm run test:sprint2
 ```
 
 Windows PowerShell 若拦截 `npm.ps1`，使用 `npm.cmd run test:sprint2`。只运行新增流程测试可用 `node --test test/sprint2-flow.test.js`。
+
+2026-10-24 补充9项 HTTP 流程测试：转写暂停保留检查点、重启后显式续跑、取消后拒绝迟到结果与再次续跑、
+录音/课程/转写变化后拒绝恢复旧分析、全部片段排除时不调用模型，以及重复ID、越界时间和倒序时间的转写结果原子拒绝。
+专项命令另纳入已有的2项播放器竞态测试。Windows Node.js 24 本轮共69项通过；未发现上述场景需要修改业务代码。
+转写续跑用例使用模拟工作器检查同一路径的检查点保留、读取与清理，不证明真实 Whisper 的分段识别或物理录音准确率。
+本轮未重跑浏览器或真实语音子进程测试。沙箱限制测试子进程时，在支持该选项的 Node.js 中使用：
+
+```sh
+node --test --test-isolation=none test/sprint2-flow.test.js test/classroom.test.js test/classroomConversation.test.js test/chineseText.test.js test/uploadPolicy.test.js test/audio-player.test.js
+```
 
 新增 `test/sprint2-flow.test.js` 通过真实 HTTP 接口、异步任务和独立临时存储验证以下流程：
 
@@ -53,6 +81,23 @@ Windows PowerShell 若拦截 `npm.ps1`，使用 `npm.cmd run test:sprint2`。只
 2026-10-18 本次验证：新增9项流程测试通过，Sprint 2 专项51项通过。检查旧测试时，为临时目录清理加入有限重试，并修正任务完成后立即断言异步检查点已删除的竞态。全量串行回归278项中277项通过；剩余旧智能体测试在Windows临时目录原子替换文件时遇到 `EPERM rename`，本次未修改业务存储实现。完整回归命令为 `npm.cmd test -- --test-concurrency=1`，本地日志为 `test-sprint2-regression.log`。本次未重跑浏览器测试。
 
 ## Sprint 3 专项验证
+
+在主应用目录运行 `npm run test:sprint3`，统一执行流程、领域与 HTTP 接口测试。
+新增的 `test/sprint3-flow.test.js` 连续验证发布防重、分页同步、字符串评分清洗、排除及恢复、
+问卷/转写/PPT 同时进入模型上下文、报告修订确认和 Markdown 导出、建议交接不改写原 PPT，
+以及新反馈使报告过期但历史依据不变。共10条连续流程用例，另外覆盖分页失败恢复、
+混合错误导入及重复导入、预览后在线反馈变化、截止时刻和缺时区、远端改题后的同步保护、
+模型失败保留已确认报告及同任务续跑、拒绝不存在的证据、跨课堂导入与任务隔离，
+以及建议修订和 PPT 版本变化后的旧交接快照保护。
+问卷平台与文本模型使用模拟调用，数据写入临时目录；不访问真实账号，不验证真实语音识别准确率、
+模型语义质量或交接后的 PPT 修改及 PPTX 导出，这些环节须配合 Sprint 1、2 及人工联调验证。
+
+2026-10-24 Windows Node.js 24 验证：新增10条流程测试和既有52项反馈专项，共62项通过。
+沙箱限制测试子进程时，可用以下同进程命令（需 Node.js 支持 `--test-isolation`）：
+
+```sh
+node --test --test-isolation=none test/sprint3-flow.test.js test/feedback.test.js test/feedback-api.test.js
+```
 
 ```sh
 node --test test/feedback.test.js test/feedback-api.test.js

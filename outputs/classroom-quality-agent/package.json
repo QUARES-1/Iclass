@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "test:sprint2": "node --test test/sprint2-flow.test.js test/classroom.test.js test/classroomConversation.test.js test/chineseText.test.js test/uploadPolicy.test.js",
+    "test:sprint1": "node --test test/sprint1-flow.test.js test/agent.test.js test/workspace.test.js test/pptExport.test.js test/review.test.js test/modelSettings.test.js test/pptGenerator.test.js test/fileParser.test.js test/analyzer.test.js test/frontier.test.js",
+    "test:sprint2": "node --test test/sprint2-flow.test.js test/classroom.test.js test/classroomConversation.test.js test/chineseText.test.js test/uploadPolicy.test.js test/audio-player.test.js",
+    "test:sprint3": "node --test test/sprint3-flow.test.js test/feedback.test.js test/feedback-api.test.js",
     "test:browser": "playwright test",
     "speech:prepare": "node scripts/prepare-speech.mjs"
   },
